@@ -21,6 +21,13 @@ struct TgAttachment: Identifiable, Equatable {
 struct TgChat: Identifiable, Equatable {
     let id: Int64
     let title: String
+    var lastMessagePreview: String?
+
+    init(id: Int64, title: String, lastMessagePreview: String? = nil) {
+        self.id = id
+        self.title = title
+        self.lastMessagePreview = lastMessagePreview
+    }
 }
 
 struct TgMessage: Identifiable, Equatable {

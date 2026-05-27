@@ -1,5 +1,16 @@
 import Foundation
 
+enum TelegramRepositoryError: LocalizedError {
+    case bootstrapFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .bootstrapFailed(let message):
+            return message
+        }
+    }
+}
+
 final class TelegramRepository {
     private let client: TelegramClientProtocol
     private let store: LocalMessageStore
@@ -7,7 +18,7 @@ final class TelegramRepository {
     var onMessagesChanged: ((Int64) -> Void)?
     var onChatsChanged: (() -> Void)?
 
-    init(client: TelegramClientProtocol = TDLibClient(), store: LocalMessageStore = try! LocalMessageStore()) {
+    init(client: TelegramClientProtocol, store: LocalMessageStore) {
         self.client = client
         self.store = store
         self.client.setEventHandler { [weak self] event in
@@ -24,6 +35,16 @@ final class TelegramRepository {
             case .chatsChanged:
                 self.onChatsChanged?()
             }
+        }
+    }
+
+    static func bootstrap() throws -> TelegramRepository {
+        do {
+            let client = try TDLibClient()
+            let store = try LocalMessageStore()
+            return TelegramRepository(client: client, store: store)
+        } catch {
+            throw TelegramRepositoryError.bootstrapFailed(error.localizedDescription)
         }
     }
 

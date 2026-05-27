@@ -3,6 +3,14 @@ import Combine
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    enum Phase: Equatable {
+        case loading
+        case setup
+        case login
+        case main
+    }
+
+    @Published var phase: Phase = .loading
     @Published var apiIdText = ""
     @Published var apiHash = ""
     @Published var phone = ""
@@ -13,87 +21,172 @@ final class AppViewModel: ObservableObject {
     @Published var selectedChatId: Int64?
     @Published var messages: [TgMessage] = []
     @Published var composeText = ""
-    @Published var status = "Введи api_id и api_hash"
+    @Published var chatSearch = ""
+    @Published var status = ""
     @Published var authState: AuthState = .waitPhone
     @Published var isBusy = false
+    @Published var bootstrapError: String?
 
-    private let repository = TelegramRepository()
+    private var repository: TelegramRepository?
+    private var isTdlibConfigured = false
+    private let credentials = ApiCredentialsStore()
 
-    init() {
-        repository.onAuthStateChanged = { [weak self] state in
-            Task { @MainActor in
-                self?.authState = state
-                if state != .ready {
-                    self?.status = "Следующий шаг авторизации: \(self?.authStateLabel(state) ?? "")"
-                }
-            }
-        }
-
-        repository.onMessagesChanged = { [weak self] chatId in
-            guard let self else { return }
-            Task { @MainActor in
-                if self.selectedChatId == chatId {
-                    await self.refreshMessages()
-                }
-            }
-        }
-
-        repository.onChatsChanged = { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                do {
-                    self.chats = try await self.repository.loadChats()
-                } catch {
-                    self.status = "Ошибка списка чатов: \(error.localizedDescription)"
-                }
-            }
+    var filteredChats: [TgChat] {
+        let query = chatSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return chats }
+        return chats.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+                || ($0.lastMessagePreview?.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
 
-    func setupClient() async {
+    var selectedChat: TgChat? {
+        guard let selectedChatId else { return nil }
+        return chats.first(where: { $0.id == selectedChatId })
+    }
+
+    func start() async {
+        phase = .loading
+        bootstrapError = nil
+
+        do {
+            let repo = try TelegramRepository.bootstrap()
+            repository = repo
+            wireRepository(repo)
+
+            if let saved = credentials.load() {
+                apiIdText = String(saved.apiId)
+                apiHash = saved.apiHash
+                await connect(saveCredentials: false)
+            } else {
+                phase = .setup
+                status = "Введите API ID и API Hash с my.telegram.org"
+            }
+        } catch {
+            bootstrapError = error.localizedDescription
+            phase = .setup
+            status = "TDLib недоступен: \(error.localizedDescription)"
+        }
+    }
+
+    func saveAndConnect() async {
         guard let apiId = Int(apiIdText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              !apiHash.isEmpty else {
-            status = "Некорректный api_id/api_hash"
+              !apiHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            status = "Укажите корректные api_id и api_hash"
             return
         }
+        credentials.save(apiId: apiId, apiHash: apiHash.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        if isTdlibConfigured, let repository {
+            authState = repository.authState()
+            await applyPhase(for: authState)
+            return
+        }
+
+        await connect(saveCredentials: false)
+    }
+
+    func connect(saveCredentials: Bool) async {
+        guard let repository else {
+            status = "Клиент не инициализирован"
+            phase = .setup
+            return
+        }
+
+        guard let apiId = Int(apiIdText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              !apiHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            status = "Укажите api_id и api_hash"
+            phase = .setup
+            return
+        }
+
+        if saveCredentials {
+            credentials.save(apiId: apiId, apiHash: apiHash.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
         isBusy = true
         defer { isBusy = false }
+
         do {
-            try await repository.setup(apiId: apiId, apiHash: apiHash)
+            if !isTdlibConfigured {
+                try await repository.setup(apiId: apiId, apiHash: apiHash.trimmingCharacters(in: .whitespacesAndNewlines))
+                isTdlibConfigured = true
+            }
             authState = repository.authState()
-            status = "TDLib инициализирован"
+            await applyPhase(for: authState)
         } catch {
-            status = "Ошибка инициализации: \(error.localizedDescription)"
+            status = error.localizedDescription
+            phase = .setup
         }
     }
 
     func submitAuth() async {
+        guard let repository else { return }
+
         isBusy = true
         defer { isBusy = false }
+
         do {
             switch authState {
             case .waitPhone:
-                try await repository.submitPhone(phone)
+                let normalized = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !normalized.isEmpty else {
+                    status = "Введите номер телефона"
+                    return
+                }
+                try await repository.submitPhone(normalized)
             case .waitCode:
-                try await repository.submitCode(code)
+                let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !normalized.isEmpty else {
+                    status = "Введите код из Telegram"
+                    return
+                }
+                try await repository.submitCode(normalized)
             case .waitPassword:
+                guard !password.isEmpty else {
+                    status = "Введите пароль 2FA"
+                    return
+                }
                 try await repository.submitPassword(password)
             case .ready:
                 break
             }
+
             authState = repository.authState()
-            if authState == .ready {
-                status = "Авторизация готова"
-                chats = try await repository.loadChats()
-                selectedChatId = chats.first?.id
-                if let selectedChatId {
-                    messages = try await repository.syncMessages(chatId: selectedChatId)
-                }
-            } else {
-                status = "Следующий шаг авторизации: \(authStateLabel(authState))"
-            }
+            await applyPhase(for: authState)
         } catch {
-            status = "Ошибка auth: \(error.localizedDescription)"
+            status = error.localizedDescription
+        }
+    }
+
+    func signOut() {
+        credentials.clear()
+        apiIdText = ""
+        apiHash = ""
+        phone = ""
+        code = ""
+        password = ""
+        chats = []
+        messages = []
+        selectedChatId = nil
+        authState = .waitPhone
+        repository = nil
+        isTdlibConfigured = false
+        bootstrapError = nil
+        phase = .setup
+        status = "Войдите снова — укажите API данные"
+        Task { await start() }
+    }
+
+    func refreshChats() async {
+        guard let repository, authState == .ready else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            chats = try await repository.loadChats()
+            status = ""
+        } catch {
+            status = error.localizedDescription
         }
     }
 
@@ -103,19 +196,18 @@ final class AppViewModel: ObservableObject {
     }
 
     func refreshMessages() async {
-        guard let chatId = selectedChatId else { return }
+        guard let repository, let chatId = selectedChatId else { return }
         isBusy = true
         defer { isBusy = false }
         do {
             messages = try await repository.syncMessages(chatId: chatId)
-            status = "Сообщения обновлены"
         } catch {
-            status = "Ошибка чтения: \(error.localizedDescription)"
+            status = error.localizedDescription
         }
     }
 
     func sendMessage() async {
-        guard let chatId = selectedChatId else { return }
+        guard let repository, let chatId = selectedChatId else { return }
         let text = composeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -124,30 +216,105 @@ final class AppViewModel: ObservableObject {
         do {
             messages = try await repository.send(chatId: chatId, text: text)
             composeText = ""
-            status = "Отправлено"
+            await refreshChats()
         } catch {
-            status = "Ошибка отправки: \(error.localizedDescription)"
+            status = error.localizedDescription
         }
     }
 
-    func downloadMedia() async {
-        guard let chatId = selectedChatId else { return }
-        isBusy = true
-        defer { isBusy = false }
-        do {
-            messages = try await repository.downloadMedia(chatId: chatId)
-            status = "Медиа загружены локально"
-        } catch {
-            status = "Ошибка загрузки медиа: \(error.localizedDescription)"
+    func authStepTitle() -> String {
+        switch authState {
+        case .waitPhone: return "Номер телефона"
+        case .waitCode: return "Код подтверждения"
+        case .waitPassword: return "Пароль 2FA"
+        case .ready: return "Готово"
         }
     }
 
-    func authStateLabel(_ state: AuthState) -> String {
+    func authStepSubtitle() -> String {
+        switch authState {
+        case .waitPhone:
+            return "Введите номер в международном формате, например +79991234567"
+        case .waitCode:
+            return "Код придёт в Telegram или по SMS"
+        case .waitPassword:
+            return "У аккаунта включена двухэтапная аутентификация"
+        case .ready:
+            return ""
+        }
+    }
+
+    private func wireRepository(_ repository: TelegramRepository) {
+        repository.onAuthStateChanged = { [weak self] state in
+            Task { @MainActor in
+                self?.authState = state
+                await self?.applyPhase(for: state)
+            }
+        }
+
+        repository.onMessagesChanged = { [weak self] chatId in
+            guard let self else { return }
+            Task { @MainActor in
+                if self.selectedChatId == chatId {
+                    await self.refreshMessages()
+                }
+                await self.refreshChats()
+            }
+        }
+
+        repository.onChatsChanged = { [weak self] in
+            Task { @MainActor in
+                await self?.refreshChats()
+            }
+        }
+    }
+
+    private func applyPhase(for state: AuthState) async {
         switch state {
-        case .waitPhone: return "номер телефона"
-        case .waitCode: return "код из Telegram"
-        case .waitPassword: return "пароль 2FA"
-        case .ready: return "готово"
+        case .ready:
+            phase = .main
+            status = ""
+            await refreshChats()
+            if selectedChatId == nil {
+                selectedChatId = chats.first?.id
+            }
+            if let selectedChatId {
+                await selectChat(selectedChatId)
+            }
+        case .waitPhone, .waitCode, .waitPassword:
+            phase = .login
+            status = ""
         }
+    }
+}
+
+private struct ApiCredentialsStore {
+    private let apiIdKey = "telegram.api_id"
+    private let apiHashKey = "telegram.api_hash"
+
+    struct Saved {
+        let apiId: Int
+        let apiHash: String
+    }
+
+    func load() -> Saved? {
+        let defaults = UserDefaults.standard
+        let apiId = defaults.integer(forKey: apiIdKey)
+        guard apiId > 0, let apiHash = defaults.string(forKey: apiHashKey), !apiHash.isEmpty else {
+            return nil
+        }
+        return Saved(apiId: apiId, apiHash: apiHash)
+    }
+
+    func save(apiId: Int, apiHash: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(apiId, forKey: apiIdKey)
+        defaults.set(apiHash, forKey: apiHashKey)
+    }
+
+    func clear() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: apiIdKey)
+        defaults.removeObject(forKey: apiHashKey)
     }
 }

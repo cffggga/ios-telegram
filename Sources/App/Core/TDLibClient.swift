@@ -2,40 +2,82 @@ import Foundation
 
 final class TDLibClient: TelegramClientProtocol {
     private let bridge: TDLibBridge
-    private let lock = NSLock()
+    private let syncQueue = DispatchQueue(label: "tdlib.client.sync")
 
     private var authState: AuthState = .waitPhone
+    private var lastAuthorizationStateType = ""
     private var eventHandler: ((TelegramEvent) -> Void)?
     private var receiveLoopTask: Task<Void, Never>?
     private var pendingResponses: [String: CheckedContinuation<[String: Any], Error>] = [:]
+    private var authorizationWaiters: [AuthStateWaiter] = []
 
-    init(bridge: TDLibBridge = try! TDLibBridge()) {
-        self.bridge = bridge
+    init() throws {
+        self.bridge = try TDLibBridge()
     }
 
     func configure(apiId: Int, apiHash: String) async throws {
         startReceiveLoopIfNeeded()
+        setLogVerbosityLevel(1)
+
+        try await waitForAuthorizationState("authorizationStateWaitTdlibParameters", timeout: 60)
+
+        let databaseDirectory = try TDLibPaths.databaseDirectory()
+        let filesDirectory = try TDLibPaths.filesDirectory()
 
         _ = try await sendRequest([
             "@type": "setTdlibParameters",
             "parameters": [
-                "database_directory": "tdlib/db",
-                "files_directory": "tdlib/files",
+                "use_test_dc": false,
+                "database_directory": databaseDirectory,
+                "files_directory": filesDirectory,
+                "use_file_database": true,
+                "use_chat_info_database": true,
                 "use_message_database": true,
                 "use_secret_chats": false,
                 "api_id": apiId,
                 "api_hash": apiHash,
-                "system_language_code": "en",
+                "system_language_code": "ru",
                 "device_model": "iPhone",
                 "system_version": "iOS",
                 "application_version": "1.0",
-                "enable_storage_optimizer": true
+                "enable_storage_optimizer": true,
+                "ignore_file_names": false
             ]
         ])
-        _ = try await sendRequest([
-            "@type": "checkDatabaseEncryptionKey",
-            "encryption_key": ""
-        ])
+
+        try await waitForAuthorizationState(
+            matching: [
+                "authorizationStateWaitEncryptionKey",
+                "authorizationStateWaitPhoneNumber",
+                "authorizationStateWaitCode",
+                "authorizationStateWaitPassword",
+                "authorizationStateReady"
+            ],
+            timeout: 60
+        )
+
+        if currentAuthorizationStateType() == "authorizationStateWaitEncryptionKey" {
+            _ = try await sendRequest([
+                "@type": "checkDatabaseEncryptionKey",
+                "encryption_key": ""
+            ])
+            try await waitForAuthorizationState(
+                matching: [
+                    "authorizationStateWaitPhoneNumber",
+                    "authorizationStateWaitCode",
+                    "authorizationStateWaitPassword",
+                    "authorizationStateReady"
+                ],
+                timeout: 60
+            )
+        }
+    }
+
+    private func setLogVerbosityLevel(_ level: Int) {
+        let payload = """
+        {"@type":"setLogVerbosityLevel","new_verbosity_level":\(level)}
+        """
+        bridge.send(payload)
     }
 
     func currentAuthState() -> AuthState {
@@ -70,6 +112,7 @@ final class TDLibClient: TelegramClientProtocol {
     func fetchChats(limit: Int = 50) async throws -> [TgChat] {
         let response = try await sendRequest([
             "@type": "getChats",
+            "chat_list": ["@type": "chatListMain"],
             "limit": limit
         ])
         guard let ids = response["chat_ids"] as? [Any] else { return [] }
@@ -82,7 +125,9 @@ final class TDLibClient: TelegramClientProtocol {
                 "chat_id": id
             ])
             if let title = chatResp["title"] as? String {
-                chats.append(TgChat(id: id, title: title))
+                let subtitle = chatResp["last_message"] as? [String: Any]
+                let preview = subtitle.flatMap { parseMessage($0, fallbackChatId: id)?.text }
+                chats.append(TgChat(id: id, title: title, lastMessagePreview: preview))
             }
         }
         return chats
@@ -141,39 +186,84 @@ final class TDLibClient: TelegramClientProtocol {
         }
     }
 
+    private func waitForAuthorizationState(_ type: String, timeout: TimeInterval) async throws {
+        try await waitForAuthorizationState(matching: [type], timeout: timeout)
+    }
+
+    private func currentAuthorizationStateType() -> String {
+        syncQueue.sync { lastAuthorizationStateType }
+    }
+
+    private func waitForAuthorizationState(matching types: [String], timeout: TimeInterval) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let waiterID = UUID()
+            syncQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: TDLibClientError.deallocated)
+                    return
+                }
+
+                if types.contains(self.lastAuthorizationStateType) {
+                    continuation.resume()
+                    return
+                }
+
+                self.authorizationWaiters.append(
+                    AuthStateWaiter(id: waiterID, matching: Set(types), continuation: continuation)
+                )
+
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
+                    guard let self else { return }
+                    self.syncQueue.async {
+                        guard let index = self.authorizationWaiters.firstIndex(where: { $0.id == waiterID }) else {
+                            return
+                        }
+                        let waiter = self.authorizationWaiters.remove(at: index)
+                        waiter.continuation.resume(throwing: TDLibClientError.authorizationTimeout)
+                    }
+                }
+            }
+        }
+    }
+
     private func sendRequest(_ body: [String: Any]) async throws -> [String: Any] {
         var payload = body
         let extra = UUID().uuidString
         payload["@extra"] = extra
         let data = try JSONSerialization.data(withJSONObject: payload)
         guard let json = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "TDLibClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "JSON encoding failed"])
+            throw TDLibClientError.jsonEncodingFailed
         }
 
         return try await withCheckedThrowingContinuation { continuation in
-            lock.lock()
-            pendingResponses[extra] = continuation
-            lock.unlock()
-            bridge.send(json)
+            syncQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: TDLibClientError.deallocated)
+                    return
+                }
+                self.pendingResponses[extra] = continuation
+                self.bridge.send(json)
+            }
         }
     }
 
     private func runReceiveLoop() async {
         while !Task.isCancelled {
-            guard let raw = bridge.receive(timeout: 0.1),
+            guard let raw = bridge.receive(timeout: 0.2),
                   let data = raw.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
             }
 
             if let extra = obj["@extra"] as? String {
-                lock.lock()
-                let continuation = pendingResponses.removeValue(forKey: extra)
-                lock.unlock()
-                if let error = tdError(from: obj) {
-                    continuation?.resume(throwing: error)
-                } else {
-                    continuation?.resume(returning: obj)
+                syncQueue.async { [weak self] in
+                    guard let self else { return }
+                    let continuation = self.pendingResponses.removeValue(forKey: extra)
+                    if let error = self.tdError(from: obj) {
+                        continuation?.resume(throwing: error)
+                    } else {
+                        continuation?.resume(returning: obj)
+                    }
                 }
             }
 
@@ -187,9 +277,23 @@ final class TDLibClient: TelegramClientProtocol {
         if type == "updateAuthorizationState",
            let stateObj = obj["authorization_state"] as? [String: Any],
            let stateType = stateObj["@type"] as? String {
-            let mapped = mapAuthState(from: stateType)
-            authState = mapped
-            eventHandler?(.authChanged(mapped))
+            syncQueue.async { [weak self] in
+                guard let self else { return }
+                self.lastAuthorizationStateType = stateType
+                let mapped = self.mapAuthState(from: stateType)
+                self.authState = mapped
+
+                var remaining: [AuthStateWaiter] = []
+                for waiter in self.authorizationWaiters {
+                    if waiter.matching.contains(stateType) {
+                        waiter.continuation.resume()
+                    } else {
+                        remaining.append(waiter)
+                    }
+                }
+                self.authorizationWaiters = remaining
+            }
+            eventHandler?(.authChanged(mapAuthState(from: stateType)))
             return
         }
 
@@ -347,5 +451,28 @@ final class TDLibClient: TelegramClientProtocol {
         let code = (obj["code"] as? Int) ?? -1
         let message = (obj["message"] as? String) ?? "TDLib error"
         return NSError(domain: "TDLibClient", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+private struct AuthStateWaiter {
+    let id: UUID
+    let matching: Set<String>
+    let continuation: CheckedContinuation<Void, Error>
+}
+
+enum TDLibClientError: LocalizedError {
+    case deallocated
+    case jsonEncodingFailed
+    case authorizationTimeout
+
+    var errorDescription: String? {
+        switch self {
+        case .deallocated:
+            return "TDLib client was closed"
+        case .jsonEncodingFailed:
+            return "Failed to encode TDLib request"
+        case .authorizationTimeout:
+            return "Timed out waiting for TDLib authorization state"
+        }
     }
 }
