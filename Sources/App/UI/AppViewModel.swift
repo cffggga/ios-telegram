@@ -70,12 +70,13 @@ final class AppViewModel: ObservableObject {
     }
 
     func saveAndConnect() async {
-        guard let apiId = Int(apiIdText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              !apiHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            status = "Укажите корректные api_id и api_hash"
+        guard let credentials = normalizedApiCredentials() else {
+            status = "Укажите корректные api_id и api_hash (без пробелов и лишних символов)"
             return
         }
-        credentials.save(apiId: apiId, apiHash: apiHash.trimmingCharacters(in: .whitespacesAndNewlines))
+        apiIdText = String(credentials.apiId)
+        apiHash = credentials.apiHash
+        self.credentials.save(apiId: credentials.apiId, apiHash: credentials.apiHash)
 
         if isTdlibConfigured, let repository {
             authState = repository.authState()
@@ -93,15 +94,18 @@ final class AppViewModel: ObservableObject {
             return
         }
 
-        guard let apiId = Int(apiIdText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              !apiHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let credentials = normalizedApiCredentials() else {
             status = "Укажите api_id и api_hash"
             phase = .setup
             return
         }
+        let apiId = credentials.apiId
+        let apiHash = credentials.apiHash
+        apiIdText = String(apiId)
+        self.apiHash = apiHash
 
         if saveCredentials {
-            credentials.save(apiId: apiId, apiHash: apiHash.trimmingCharacters(in: .whitespacesAndNewlines))
+            self.credentials.save(apiId: apiId, apiHash: apiHash)
         }
 
         isBusy = true
@@ -109,13 +113,19 @@ final class AppViewModel: ObservableObject {
 
         do {
             if !isTdlibConfigured {
-                try await repository.setup(apiId: apiId, apiHash: apiHash.trimmingCharacters(in: .whitespacesAndNewlines))
+                try await repository.setup(apiId: apiId, apiHash: apiHash)
                 isTdlibConfigured = true
             }
             authState = repository.authState()
             await applyPhase(for: authState)
         } catch {
-            status = error.localizedDescription
+            let message = error.localizedDescription
+            let upper = message.uppercased()
+            if upper.contains("API_ID_INVALID") || upper.contains("APP_ID_INVALID") {
+                status = "Telegram отклоняет api_id/api_hash. Проверь на my.telegram.org -> API development tools, что это App api_id и App api_hash из одной пары."
+            } else {
+                status = message
+            }
             phase = .setup
         }
     }
@@ -285,6 +295,31 @@ final class AppViewModel: ObservableObject {
             phase = .login
             status = ""
         }
+    }
+
+    private func normalizedApiCredentials() -> (apiId: Int, apiHash: String)? {
+        let idDigits = apiIdText.unicodeScalars
+            .filter { CharacterSet.decimalDigits.contains($0) }
+            .map(String.init)
+            .joined()
+
+        guard let apiId = Int(idDigits), apiId > 0 else {
+            return nil
+        }
+
+        let trimmedHash = apiHash.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allowedHex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let normalizedHash = trimmedHash.unicodeScalars
+            .filter { allowedHex.contains($0) }
+            .map(String.init)
+            .joined()
+            .lowercased()
+
+        guard normalizedHash.count == 32 else {
+            return nil
+        }
+
+        return (apiId, normalizedHash)
     }
 }
 

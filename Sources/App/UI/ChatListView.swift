@@ -37,15 +37,35 @@ struct ChatListView: View {
         }
         .overlay {
             if vm.chats.isEmpty && !vm.isBusy {
-                ContentUnavailableView(
-                    "Нет чатов",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Потяните вниз или нажмите обновить")
-                )
+                emptyChatsView
             }
         }
         .refreshable {
             await vm.refreshChats()
+        }
+    }
+
+    @ViewBuilder
+    private var emptyChatsView: some View {
+        if #available(iOS 17.0, *) {
+            ContentUnavailableView(
+                "Нет чатов",
+                systemImage: "bubble.left.and.bubble.right",
+                description: Text("Потяните вниз или нажмите обновить")
+            )
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.secondary)
+                Text("Нет чатов")
+                    .font(.headline)
+                Text("Потяните вниз или нажмите обновить")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(20)
         }
     }
 }

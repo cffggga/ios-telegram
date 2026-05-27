@@ -1,6 +1,6 @@
 import Foundation
 
-final class TDLibClient: TelegramClientProtocol {
+final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
     private let bridge: TDLibBridge
     private let syncQueue = DispatchQueue(label: "tdlib.client.sync")
 
