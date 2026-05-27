@@ -84,6 +84,7 @@ final class AppViewModel: ObservableObject {
             return
         }
 
+        await recreateRepository()
         await connect(saveCredentials: false)
     }
 
@@ -320,6 +321,19 @@ final class AppViewModel: ObservableObject {
         }
 
         return (apiId, normalizedHash)
+    }
+
+    private func recreateRepository() async {
+        do {
+            let repo = try TelegramRepository.bootstrap()
+            repository = repo
+            wireRepository(repo)
+            isTdlibConfigured = false
+            bootstrapError = nil
+        } catch {
+            bootstrapError = error.localizedDescription
+            status = "Не удалось пересоздать TDLib клиент: \(error.localizedDescription)"
+        }
     }
 }
 

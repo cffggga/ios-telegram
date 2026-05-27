@@ -16,6 +16,10 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
     }
 
     func configure(apiId: Int, apiHash: String) async throws {
+        guard apiId > 0, apiId <= Int(Int32.max), apiHash.count == 32 else {
+            throw TDLibClientError.invalidApiCredentials
+        }
+
         startReceiveLoopIfNeeded()
         setLogVerbosityLevel(1)
 
@@ -34,7 +38,7 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                 "use_chat_info_database": true,
                 "use_message_database": true,
                 "use_secret_chats": false,
-                "api_id": apiId,
+                "api_id": Int32(apiId),
                 "api_hash": apiHash,
                 "system_language_code": "ru",
                 "device_model": "iPhone",
@@ -464,6 +468,7 @@ enum TDLibClientError: LocalizedError {
     case deallocated
     case jsonEncodingFailed
     case authorizationTimeout
+    case invalidApiCredentials
 
     var errorDescription: String? {
         switch self {
@@ -473,6 +478,8 @@ enum TDLibClientError: LocalizedError {
             return "Failed to encode TDLib request"
         case .authorizationTimeout:
             return "Timed out waiting for TDLib authorization state"
+        case .invalidApiCredentials:
+            return "Invalid API credentials format"
         }
     }
 }
