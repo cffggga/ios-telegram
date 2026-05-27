@@ -135,3 +135,68 @@ workflows:
       - build/ios/ipa/*.ipa
       - build/ios/archive/*.xcarchive
       - /tmp/xcodebuild_logs/*.log
+
+  telegram-user-client-altstore-ipa:
+    name: Telegram User Client AltStore IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "TelegramUserClient.xcodeproj"
+        XCODE_SCHEME: "TelegramUserClient"
+    scripts:
+      - name: Install XcodeGen
+        script: brew install xcodegen
+
+      - name: Resolve project directory
+        script: |
+          APP_DIR="$CM_BUILD_DIR/ios-telegram-user-client"
+          if [ ! -f "$APP_DIR/project.yml" ]; then
+            APP_DIR="$CM_BUILD_DIR"
+          fi
+          echo "APP_DIR=$APP_DIR" >> $CM_ENV
+
+      - name: Validate TDLib artifacts
+        script: |
+          if [ ! -f "$APP_DIR/tdlib/lib/libtdjson.a" ]; then
+            echo "Missing tdlib/lib/libtdjson.a"
+            exit 1
+          fi
+          if [ ! -d "$APP_DIR/tdlib/include" ]; then
+            echo "Missing tdlib/include"
+            exit 1
+          fi
+
+      - name: Generate Xcode project
+        script: |
+          cd "$APP_DIR"
+          xcodegen generate --spec project.yml
+
+      - name: Build unsigned app for iPhoneOS
+        script: |
+          cd "$APP_DIR"
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Pack unsigned IPA for AltStore
+        script: |
+          mkdir -p "$CM_BUILD_DIR/build/Payload"
+          APP_PATH=$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -path "*/Build/Products/Release-iphoneos/*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Device .app not found"
+            exit 1
+          fi
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/build/Payload/"
+          cd "$CM_BUILD_DIR/build"
+          zip -r "TelegramUserClient-altstore-unsigned.ipa" Payload
+    artifacts:
+      - build/*.ipa
+      - /tmp/xcodebuild_logs/*.log
