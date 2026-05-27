@@ -43,6 +43,8 @@ targets:
           - "-ltde2e"
           - "-lssl"
           - "-lcrypto"
+          - "-lc++"
+          - "-lz"
         "OTHER_LDFLAGS[sdk=iphonesimulator*]":
           - "-ltdjson"
           - "-ltdjson_private"
@@ -58,3 +60,5 @@ targets:
           - "-ltde2e"
           - "-lssl"
           - "-lcrypto"
+          - "-lc++"
+          - "-lz"
