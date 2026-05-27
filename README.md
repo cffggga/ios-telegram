@@ -34,6 +34,21 @@
 
 Есть готовый `ios-telegram-user-client/codemagic.yaml`.
 
+### Device IPA (LiveContainer)
+
+Для сборки `ipa` под реальное iOS-устройство используй workflow
+`telegram-user-client-device-ipa`.
+
+Что нужно настроить в Codemagic перед запуском:
+- подключить App Store Connect API key (Users and Access -> Keys);
+- добавить iOS сертификат подписи и provisioning profile для
+  `online.maseai.telegramuserclient` (ad-hoc);
+- убедиться, что UDID целевого устройства добавлен в provisioning profile.
+
+Результат сборки:
+- `build/ios/ipa/*.ipa` - готовый файл для установки/импорта в LiveContainer;
+- `build/ios/archive/*.xcarchive` - архив Xcode.
+
 Перед запуском workflow убедись, что в репозитории есть:
 - `ios-telegram-user-client/tdlib/lib/libtdjson.a`
 - `ios-telegram-user-client/tdlib/include/...`
