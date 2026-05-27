@@ -28,7 +28,22 @@ targets:
           - "$(SRCROOT)/tdlib/lib-iphoneos"
         "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]":
           - "$(SRCROOT)/tdlib/lib"
-        OTHER_LDFLAGS:
+        "OTHER_LDFLAGS[sdk=iphoneos*]":
+          - "-ltdjson_static"
+          - "-ltdjson_private"
+          - "-ltdclient"
+          - "-ltdcore"
+          - "-ltdapi"
+          - "-ltdactor"
+          - "-ltdutils"
+          - "-ltddb"
+          - "-ltdsqlite"
+          - "-ltdnet"
+          - "-ltdmtproto"
+          - "-ltde2e"
+          - "-lssl"
+          - "-lcrypto"
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]":
           - "-ltdjson"
           - "-ltdjson_private"
           - "-ltdclient"

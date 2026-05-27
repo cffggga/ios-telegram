@@ -163,8 +163,8 @@ workflows:
             echo "Missing simulator tdlib/lib/libtdjson.a"
             exit 1
           fi
-          if [ ! -f "$APP_DIR/tdlib/lib-iphoneos/libtdjson.a" ]; then
-            echo "Missing device tdlib/lib-iphoneos/libtdjson.a"
+          if [ ! -f "$APP_DIR/tdlib/lib-iphoneos/libtdjson_static.a" ]; then
+            echo "Missing device tdlib/lib-iphoneos/libtdjson_static.a"
             exit 1
           fi
           if [ ! -d "$APP_DIR/tdlib/include" ]; then
