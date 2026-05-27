@@ -160,7 +160,11 @@ workflows:
       - name: Validate TDLib artifacts
         script: |
           if [ ! -f "$APP_DIR/tdlib/lib/libtdjson.a" ]; then
-            echo "Missing tdlib/lib/libtdjson.a"
+            echo "Missing simulator tdlib/lib/libtdjson.a"
+            exit 1
+          fi
+          if [ ! -f "$APP_DIR/tdlib/lib-iphoneos/libtdjson.a" ]; then
+            echo "Missing device tdlib/lib-iphoneos/libtdjson.a"
             exit 1
           fi
           if [ ! -d "$APP_DIR/tdlib/include" ]; then

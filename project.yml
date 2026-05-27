@@ -24,7 +24,9 @@ targets:
         SUPPORTS_MACCATALYST: NO
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/tdlib/include"
-        LIBRARY_SEARCH_PATHS:
+        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]":
+          - "$(SRCROOT)/tdlib/lib-iphoneos"
+        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]":
           - "$(SRCROOT)/tdlib/lib"
         OTHER_LDFLAGS:
           - "-ltdjson"
