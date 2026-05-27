@@ -28,25 +28,25 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         let databaseDirectory = try TDLibPaths.databaseDirectory()
         let filesDirectory = try TDLibPaths.filesDirectory()
 
+        // TDLib 1.8.6+ requires flat fields at root — nested "parameters" makes api_id=0.
         _ = try await sendRequest([
             "@type": "setTdlibParameters",
-            "parameters": [
-                "use_test_dc": false,
-                "database_directory": databaseDirectory,
-                "files_directory": filesDirectory,
-                "use_file_database": true,
-                "use_chat_info_database": true,
-                "use_message_database": true,
-                "use_secret_chats": false,
-                "api_id": Int32(apiId),
-                "api_hash": apiHash,
-                "system_language_code": "ru",
-                "device_model": "iPhone",
-                "system_version": "iOS",
-                "application_version": "1.0",
-                "enable_storage_optimizer": true,
-                "ignore_file_names": false
-            ]
+            "use_test_dc": false,
+            "database_directory": databaseDirectory,
+            "files_directory": filesDirectory,
+            "database_encryption_key": "",
+            "use_file_database": true,
+            "use_chat_info_database": true,
+            "use_message_database": true,
+            "use_secret_chats": false,
+            "api_id": apiId,
+            "api_hash": apiHash,
+            "system_language_code": "ru",
+            "device_model": "iPhone",
+            "system_version": "iOS",
+            "application_version": "1.0",
+            "enable_storage_optimizer": true,
+            "ignore_file_names": false
         ])
 
         try await waitForAuthorizationState(
