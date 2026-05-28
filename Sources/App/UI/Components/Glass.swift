@@ -20,30 +20,25 @@ struct GlassButton: ButtonStyle {
     var cornerRadius: CGFloat = 18
 
     func makeBody(configuration: Configuration) -> some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                configuration.label
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(prominent ? .glassProminent : .glass)
-            } else {
-                configuration.label
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        prominent
-                            ? AnyShapeStyle(AppColors.accent.opacity(configuration.isPressed ? 0.75 : 0.95))
-                            : AnyShapeStyle(.ultraThinMaterial)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .stroke(Color.white.opacity(prominent ? 0.10 : 0.18), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
-                    .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            }
-        }
+        // NOTE: Apple’s Liquid Glass button styles are not available in all SwiftUI toolchains yet.
+        // We keep our own look and add Liquid Glass via glassEffect() when iOS 26+ is available.
+        configuration.label
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(
+                prominent
+                    ? AnyShapeStyle(AppColors.accent.opacity(configuration.isPressed ? 0.75 : 0.95))
+                    : AnyShapeStyle(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(prominent ? 0.10 : 0.18), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .applyLiquidGlassIfAvailable()
+            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

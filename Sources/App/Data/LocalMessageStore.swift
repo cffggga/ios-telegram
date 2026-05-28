@@ -88,6 +88,8 @@ final class LocalMessageStore {
                         text: readText(stmt, 2),
                         outgoing: sqlite3_column_int(stmt, 3) == 1,
                         createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4)),
+                        isEdited: false,
+                        replyToMessageId: nil,
                         isDeleted: sqlite3_column_int(stmt, 5) == 1,
                         attachments: try readAttachments(messageId: sqlite3_column_int64(stmt, 0))
                     )
