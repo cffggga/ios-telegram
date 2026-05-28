@@ -80,19 +80,9 @@ extension View {
 
     @ViewBuilder
     func glassButton(prominent: Bool = false) -> some View {
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            if prominent {
-                self.buttonStyle(.glassProminent)
-            } else {
-                self.buttonStyle(.glass)
-            }
-        } else {
-            self.buttonStyle(LegacyGlassButton(prominent: prominent))
-        }
-        #else
-        self.buttonStyle(LegacyGlassButton(prominent: prominent))
-        #endif
+        self
+            .buttonStyle(LegacyGlassButton(prominent: prominent))
+            .applyLiquidGlassIfAvailable(cornerRadius: 18, interactive: true)
     }
 
     @ViewBuilder

@@ -271,6 +271,7 @@ struct ChatProfileView: View {
 
     private func kindText(_ kind: ChatKind) -> String {
         switch kind {
+        case .savedMessages: return "Saved Messages"
         case .private: return "Пользователь"
         case .basicGroup: return "Группа"
         case .supergroup: return "Супергруппа"

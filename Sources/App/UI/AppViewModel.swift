@@ -318,6 +318,137 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func markChatRead(_ chatId: Int64) async {
+        guard let repository else { return }
+        let needsServerUpdate = chats.first(where: { $0.id == chatId }).map {
+            $0.unreadCount > 0 || $0.isMarkedUnread
+        } ?? true
+
+        updateLocalChat(chatId) { chat in
+            chat.unreadCount = 0
+            chat.isMarkedUnread = false
+        }
+
+        guard needsServerUpdate else { return }
+
+        do {
+            try await repository.markChatRead(chatId: chatId)
+            try await repository.markChatUnread(chatId: chatId, unread: false)
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
+    func markChatUnread(_ chatId: Int64) async {
+        guard let repository else { return }
+        updateLocalChat(chatId) { chat in
+            chat.isMarkedUnread = true
+            chat.unreadCount = max(chat.unreadCount, 1)
+        }
+
+        do {
+            try await repository.markChatUnread(chatId: chatId, unread: true)
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
+    func setChatPinned(_ chatId: Int64, pinned: Bool) async {
+        guard let repository else { return }
+        updateLocalChat(chatId) { chat in
+            chat.isPinned = pinned
+            chat.pinOrder = pinned ? Int64(Date().timeIntervalSince1970) : nil
+        }
+        chats = sortChats(chats)
+
+        do {
+            try await repository.setChatPinned(chatId: chatId, pinned: pinned)
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
+    func setChatMute(_ chatId: Int64, duration: ChatMuteDuration) async {
+        guard let repository else { return }
+        updateLocalChat(chatId) { chat in
+            chat.isMuted = duration != .off
+            chat.muteUntil = muteUntilDate(for: duration)
+        }
+
+        do {
+            try await repository.setChatMute(chatId: chatId, duration: duration)
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
+    func clearChatHistory(_ chatId: Int64) async {
+        guard let repository else { return }
+        do {
+            try await repository.clearChatHistory(chatId: chatId)
+            if selectedChatId == chatId {
+                messages = []
+            }
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func deleteChat(_ chatId: Int64) async {
+        guard let repository else { return }
+        chats.removeAll { $0.id == chatId }
+        do {
+            try await repository.deleteChat(chatId: chatId)
+            if selectedChatId == chatId {
+                selectedChatId = nil
+                messages = []
+            }
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
+    func leaveChat(_ chatId: Int64) async {
+        guard let repository else { return }
+        chats.removeAll { $0.id == chatId }
+        do {
+            try await repository.leaveChat(chatId: chatId)
+            if selectedChatId == chatId {
+                selectedChatId = nil
+                messages = []
+            }
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
+    func movePinnedChats(from source: IndexSet, to destination: Int) async {
+        guard let repository else { return }
+        var pinned = chats.filter(\.isPinned)
+        moveItems(in: &pinned, from: source, to: destination)
+        let pinnedIds = pinned.map(\.id)
+
+        do {
+            try await repository.reorderPinnedChats(chatIds: pinnedIds)
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+            await refreshChats()
+        }
+    }
+
     func quoteMessage(_ message: TgMessage) {
         let snippet = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !snippet.isEmpty else { return }
@@ -358,10 +489,10 @@ final class AppViewModel: ObservableObject {
         repository.onMessagesChanged = { [weak self] chatId in
             guard let self else { return }
             Task { @MainActor in
-            if self.selectedChatId == chatId {
-                await self.refreshMessages()
-                await self.markChatRead(chatId)
-            }
+                if self.selectedChatId == chatId {
+                    await self.refreshMessages()
+                    await self.markChatRead(chatId)
+                }
             }
         }
 
@@ -393,12 +524,6 @@ final class AppViewModel: ObservableObject {
             phase = .main
             status = ""
             await refreshChats()
-            if selectedChatId == nil {
-                selectedChatId = chats.first?.id
-            }
-            if let selectedChatId {
-                await selectChat(selectedChatId)
-            }
         case .waitPhone, .waitCode, .waitPassword:
             phase = .login
             status = ""
@@ -483,6 +608,71 @@ final class AppViewModel: ObservableObject {
             chatMediaMessages = try await repository.loadChatMedia(chatId: chatId)
         } catch {
             status = error.localizedDescription
+        }
+    }
+
+    private func applyTyping(_ text: String?, for chatId: Int64) {
+        typingClearTasks[chatId]?.cancel()
+        updateLocalChat(chatId) { chat in
+            chat.typingText = text
+        }
+
+        guard text != nil else { return }
+
+        typingClearTasks[chatId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.updateLocalChat(chatId) { chat in
+                    chat.typingText = nil
+                }
+                self?.typingClearTasks[chatId] = nil
+            }
+        }
+    }
+
+    private func updateLocalChat(_ chatId: Int64, mutate: (inout TgChat) -> Void) {
+        guard let index = chats.firstIndex(where: { $0.id == chatId }) else { return }
+        mutate(&chats[index])
+    }
+
+    private func sortChats(_ items: [TgChat]) -> [TgChat] {
+        items.sorted { lhs, rhs in
+            if lhs.isPinned != rhs.isPinned {
+                return lhs.isPinned && !rhs.isPinned
+            }
+            if lhs.isPinned && rhs.isPinned {
+                return (lhs.pinOrder ?? 0) > (rhs.pinOrder ?? 0)
+            }
+            return (lhs.lastMessageDate ?? .distantPast) > (rhs.lastMessageDate ?? .distantPast)
+        }
+    }
+
+    private func muteUntilDate(for duration: ChatMuteDuration) -> Date? {
+        switch duration {
+        case .off:
+            return nil
+        case .oneHour, .eightHours:
+            return Date().addingTimeInterval(TimeInterval(duration.seconds))
+        case .forever:
+            return nil
+        }
+    }
+
+    private func moveItems(in items: inout [TgChat], from source: IndexSet, to destination: Int) {
+        let moving = source.sorted().map { items[$0] }
+        for index in source.sorted(by: >) {
+            items.remove(at: index)
+        }
+
+        var insertionIndex = destination
+        let removedBeforeDestination = source.filter { $0 < destination }.count
+        insertionIndex -= removedBeforeDestination
+        insertionIndex = max(0, min(insertionIndex, items.count))
+
+        for item in moving {
+            items.insert(item, at: insertionIndex)
+            insertionIndex += 1
         }
     }
 }

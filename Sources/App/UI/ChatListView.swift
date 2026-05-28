@@ -11,22 +11,16 @@ struct ChatListView: View {
             List {
                 pullDetector
 
-                ForEach(vm.filteredChats) { chat in
-                    NavigationLink(value: chat.id) {
-                        ChatCardView(chat: chat)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button {
-                            UIPasteboard.general.string = "\(chat.id)"
-                        } label: {
-                            Label("Copy ID", systemImage: "number")
-                        }
-                        .tint(.secondary)
-                    }
+                ForEach(visiblePinnedChats) { chat in
+                    chatRow(chat)
+                }
+                .onMove { source, destination in
+                    guard vm.chatSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                    Task { await vm.movePinnedChats(from: source, to: destination) }
+                }
+
+                ForEach(visibleOtherChats) { chat in
+                    chatRow(chat)
                 }
             }
             .listStyle(.plain)
@@ -46,11 +40,176 @@ struct ChatListView: View {
             .refreshable {
                 await vm.refreshChats()
             }
+            .toolbar {
+                if !visiblePinnedChats.isEmpty && vm.chatSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        EditButton()
+                    }
+                }
+            }
 
             searchField
         }
         .onPreferenceChange(ChatListPullOffsetKey.self) { value in
             updateSearchVisibility(offset: value)
+        }
+    }
+
+    private var visiblePinnedChats: [TgChat] {
+        vm.filteredChats.filter(\.isPinned)
+    }
+
+    private var visibleOtherChats: [TgChat] {
+        vm.filteredChats.filter { !$0.isPinned }
+    }
+
+    private func chatRow(_ chat: TgChat) -> some View {
+        NavigationLink(value: chat.id) {
+            ChatCardView(chat: chat)
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12))
+        .contextMenu {
+            chatContextMenu(for: chat)
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button {
+                Task { await vm.setChatPinned(chat.id, pinned: !chat.isPinned) }
+            } label: {
+                Label(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin.fill")
+            }
+            .tint(.orange)
+
+            Button {
+                Task {
+                    if chat.unreadCount > 0 || chat.isMarkedUnread {
+                        await vm.markChatRead(chat.id)
+                    } else {
+                        await vm.markChatUnread(chat.id)
+                    }
+                }
+            } label: {
+                Label(chat.unreadCount > 0 || chat.isMarkedUnread ? "Read" : "Unread", systemImage: chat.unreadCount > 0 || chat.isMarkedUnread ? "envelope.open" : "envelope.badge")
+            }
+            .tint(AppColors.accent)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                Task {
+                    if chat.kind == .basicGroup || chat.kind == .supergroup || chat.kind == .channel {
+                        await vm.leaveChat(chat.id)
+                    } else {
+                        await vm.deleteChat(chat.id)
+                    }
+                }
+            } label: {
+                Label(deleteTitle(for: chat), systemImage: "trash")
+            }
+
+            Button {
+                Task { await vm.setChatMute(chat.id, duration: chat.isMuted ? .off : .forever) }
+            } label: {
+                Label(chat.isMuted ? "Unmute" : "Mute", systemImage: chat.isMuted ? "bell.fill" : "bell.slash.fill")
+            }
+            .tint(.indigo)
+        }
+    }
+
+    @ViewBuilder
+    private func chatContextMenu(for chat: TgChat) -> some View {
+        Button {
+            Task { await vm.setChatPinned(chat.id, pinned: !chat.isPinned) }
+        } label: {
+            Label(chat.isPinned ? "Unpin Chat" : "Pin Chat", systemImage: chat.isPinned ? "pin.slash" : "pin.fill")
+        }
+
+        if chat.isMuted {
+            Button {
+                Task { await vm.setChatMute(chat.id, duration: .off) }
+            } label: {
+                Label("Unmute", systemImage: "bell.fill")
+            }
+        } else {
+            Menu {
+                Button("1 hour") {
+                    Task { await vm.setChatMute(chat.id, duration: .oneHour) }
+                }
+                Button("8 hours") {
+                    Task { await vm.setChatMute(chat.id, duration: .eightHours) }
+                }
+                Button("Forever") {
+                    Task { await vm.setChatMute(chat.id, duration: .forever) }
+                }
+            } label: {
+                Label("Mute", systemImage: "bell.slash.fill")
+            }
+        }
+
+        Button {
+            Task { await vm.markChatRead(chat.id) }
+        } label: {
+            Label("Mark as Read", systemImage: "envelope.open")
+        }
+
+        if chat.kind == .private || chat.kind == .savedMessages {
+            Button {
+                Task { await vm.markChatUnread(chat.id) }
+            } label: {
+                Label("Mark as Unread", systemImage: "envelope.badge")
+            }
+        }
+
+        Divider()
+
+        if chat.kind == .private || chat.kind == .savedMessages {
+            Button(role: .destructive) {
+                Task { await vm.clearChatHistory(chat.id) }
+            } label: {
+                Label("Clear History", systemImage: "eraser")
+            }
+
+            if chat.kind == .private {
+                Button(role: .destructive) {
+                    Task { await vm.deleteChat(chat.id) }
+                } label: {
+                    Label("Delete Chat", systemImage: "trash")
+                }
+            }
+        } else if chat.kind == .channel {
+            Button(role: .destructive) {
+                Task { await vm.leaveChat(chat.id) }
+            } label: {
+                Label("Leave Channel", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } else {
+            Button(role: .destructive) {
+                Task { await vm.clearChatHistory(chat.id) }
+            } label: {
+                Label("Clear History", systemImage: "eraser")
+            }
+            Button(role: .destructive) {
+                Task { await vm.leaveChat(chat.id) }
+            } label: {
+                Label("Leave Group", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+            Button(role: .destructive) {
+                Task { await vm.leaveChat(chat.id) }
+            } label: {
+                Label("Delete and Leave", systemImage: "trash")
+            }
+        }
+    }
+
+    private func deleteTitle(for chat: TgChat) -> String {
+        switch chat.kind {
+        case .channel:
+            return "Leave"
+        case .basicGroup, .supergroup:
+            return "Leave"
+        default:
+            return "Delete"
         }
     }
 
@@ -197,6 +356,7 @@ private struct ChatCardView: View {
             return preview
         }
         switch chat.kind {
+        case .savedMessages: return "Saved Messages"
         case .private: return "Личное сообщение"
         case .basicGroup, .supergroup: return "Группа"
         case .channel: return "Канал"
@@ -206,6 +366,7 @@ private struct ChatCardView: View {
 
     private func iconName(for kind: ChatKind) -> String {
         switch kind {
+        case .savedMessages: return "bookmark.fill"
         case .private: return "person.fill"
         case .basicGroup, .supergroup: return "person.2.fill"
         case .channel: return "megaphone.fill"

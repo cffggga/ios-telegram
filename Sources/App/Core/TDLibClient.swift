@@ -405,8 +405,7 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             "@type": "viewMessages",
             "chat_id": chatId,
             "message_ids": messageIds,
-            "force_read": true,
-            "source": NSNull()
+            "force_read": true
         ])
     }
 
@@ -1058,12 +1057,6 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             "sound_id": 0,
             "use_default_show_preview": true,
             "show_preview": true,
-            "use_default_mute_stories": true,
-            "mute_stories": false,
-            "use_default_story_sound": true,
-            "story_sound_id": 0,
-            "use_default_show_story_poster": true,
-            "show_story_poster": true,
             "use_default_disable_pinned_message_notifications": true,
             "disable_pinned_message_notifications": false,
             "use_default_disable_mention_notifications": true,
