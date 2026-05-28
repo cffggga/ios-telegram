@@ -3,6 +3,7 @@ import SwiftUI
 struct ChatDetailView: View {
     @ObservedObject var vm: AppViewModel
     let chatId: Int64
+    @FocusState private var isComposerFocused: Bool
 
     private var title: String {
         vm.chats.first(where: { $0.id == chatId })?.title ?? "Чат"
@@ -23,11 +24,23 @@ struct ChatDetailView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(vm.messages) { message in
-                            MessageBubbleView(message: message)
+                            MessageBubbleView(
+                                message: message,
+                                incomingAvatarPath: selectedChat?.avatarPath,
+                                incomingTitle: title,
+                                onEdit: {
+                                    vm.startEditing(message)
+                                    isComposerFocused = true
+                                },
+                                onDelete: { revoke in
+                                    Task { await vm.deleteMyMessage(message, revoke: revoke) }
+                                }
+                            )
                                 .id(message.id)
                                 .swipeActions(edge: .leading, allowsFullSwipe: false) {
                                     Button {
                                         vm.quoteMessage(message)
+                                        isComposerFocused = true
                                     } label: {
                                         Label("Цитата", systemImage: "arrowshape.turn.up.left")
                                     }
@@ -38,6 +51,14 @@ struct ChatDetailView: View {
                     .padding(.vertical, 8)
                 }
                 .background(AppColors.chatBackground)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                        .onChanged { value in
+                            if value.translation.height > 18 {
+                                isComposerFocused = false
+                            }
+                        }
+                )
                 .onChange(of: vm.messages.count) { _ in
                     if let last = vm.messages.last {
                         withAnimation(.easeOut(duration: 0.2)) {
@@ -57,18 +78,42 @@ struct ChatDetailView: View {
             HStack(spacing: 12) {
                 TextField("Сообщение", text: $vm.composeText, axis: .vertical)
                     .lineLimit(1...4)
+                    .focused($isComposerFocused)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(AppColors.composerBackground)
-                    .clipShape(Capsule())
+                    .background(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                if vm.editingMessageId != nil {
+                    Button {
+                        vm.cancelEditing()
+                        isComposerFocused = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(10)
+                            .background(Color.white.opacity(0.10))
+                            .clipShape(Circle())
+                    }
+                    .disabled(vm.isBusy)
+                }
 
                 Button {
-                    Task { await vm.sendMessage() }
+                    Task {
+                        await vm.sendMessage()
+                        isComposerFocused = false
+                    }
                 } label: {
                     Image(systemName: "paperplane.fill")
-                        .foregroundStyle(.white)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .white)
                         .padding(10)
-                        .background(AppColors.accent)
+                        .background(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.white.opacity(0.12) : AppColors.accent)
                         .clipShape(Circle())
                 }
                 .disabled(vm.isBusy || vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -78,8 +123,13 @@ struct ChatDetailView: View {
             .background(AppColors.chatBackground)
         }
         .background(AppColors.chatBackground)
+        .preferredColorScheme(.dark)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            // Load chat immediately on entry
+            await vm.selectChat(chatId)
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {

@@ -131,15 +131,16 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             if let title = chatResp["title"] as? String {
                 let subtitle = chatResp["last_message"] as? [String: Any]
                 let preview = subtitle.flatMap { parseMessage($0, fallbackChatId: id)?.text }
-                let avatarPath = parseChatAvatarPath(chatResp)
-                let statusText = try await resolveChatStatusText(chatResp)
+                let avatarPath = try await resolveChatAvatarPath(chatResp)
+                let statusInfo = try await resolveChatStatusInfo(chatResp)
                 chats.append(
                     TgChat(
                         id: id,
                         title: title,
                         lastMessagePreview: preview,
                         avatarPath: avatarPath,
-                        statusText: statusText
+                        statusText: statusInfo.text,
+                        isOnline: statusInfo.isOnline
                     )
                 )
             }
@@ -172,6 +173,31 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                     "text": text
                 ]
             ]
+        ])
+    }
+
+    func editMessage(chatId: Int64, messageId: Int64, text: String) async throws {
+        _ = try await sendRequest([
+            "@type": "editMessageText",
+            "chat_id": chatId,
+            "message_id": messageId,
+            "input_message_content": [
+                "@type": "inputMessageText",
+                "text": [
+                    "@type": "formattedText",
+                    "text": text
+                ]
+            ]
+        ])
+    }
+
+    func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws {
+        guard !messageIds.isEmpty else { return }
+        _ = try await sendRequest([
+            "@type": "deleteMessages",
+            "chat_id": chatId,
+            "message_ids": messageIds,
+            "revoke": revoke
         ])
     }
 
@@ -450,25 +476,34 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         return nil
     }
 
-    private func parseChatAvatarPath(_ chat: [String: Any]) -> String? {
+    private func resolveChatAvatarPath(_ chat: [String: Any]) async throws -> String? {
         guard
             let photo = chat["photo"] as? [String: Any],
-            let small = photo["small"] as? [String: Any],
-            let local = small["local"] as? [String: Any],
-            let path = local["path"] as? String,
-            !path.isEmpty
+            let small = photo["small"] as? [String: Any]
         else {
             return nil
         }
-        return path
+
+        if
+            let local = small["local"] as? [String: Any],
+            let path = local["path"] as? String,
+            !path.isEmpty {
+            return path
+        }
+
+        if let fileId = int64Value(small["id"]) {
+            return try await downloadFile(fileId: fileId)
+        }
+
+        return nil
     }
 
-    private func resolveChatStatusText(_ chat: [String: Any]) async throws -> String? {
+    private func resolveChatStatusInfo(_ chat: [String: Any]) async throws -> (text: String?, isOnline: Bool?) {
         guard
             let type = chat["type"] as? [String: Any],
             let typeName = type["@type"] as? String
         else {
-            return nil
+            return (nil, nil)
         }
 
         if typeName == "chatTypePrivate", let userId = int64Value(type["user_id"]) {
@@ -479,34 +514,34 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             if let status = userResp["status"] as? [String: Any] {
                 return mapUserStatus(status)
             }
-            return "был(а) недавно"
+            return ("был(а) недавно", false)
         }
 
         if typeName == "chatTypeBasicGroup" || typeName == "chatTypeSupergroup" {
-            return "группа"
+            return ("группа", false)
         }
 
-        return nil
+        return (nil, nil)
     }
 
-    private func mapUserStatus(_ status: [String: Any]) -> String {
+    private func mapUserStatus(_ status: [String: Any]) -> (text: String, isOnline: Bool) {
         let statusType = status["@type"] as? String ?? ""
         switch statusType {
         case "userStatusOnline":
-            return "в сети"
+            return ("в сети", true)
         case "userStatusOffline":
             if let wasOnline = int64Value(status["was_online"]), wasOnline > 0 {
-                return "был(а) в сети \(relativeTimeText(fromUnix: wasOnline))"
+                return ("был(а) в сети \(relativeTimeText(fromUnix: wasOnline))", false)
             }
-            return "был(а) недавно"
+            return ("был(а) недавно", false)
         case "userStatusRecently":
-            return "был(а) недавно"
+            return ("был(а) недавно", false)
         case "userStatusLastWeek":
-            return "был(а) на этой неделе"
+            return ("был(а) на этой неделе", false)
         case "userStatusLastMonth":
-            return "был(а) в этом месяце"
+            return ("был(а) в этом месяце", false)
         default:
-            return "скрыт(а)"
+            return ("скрыт(а)", false)
         }
     }
 

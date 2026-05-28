@@ -2,20 +2,24 @@ import SwiftUI
 
 struct MessageBubbleView: View {
     let message: TgMessage
+    let incomingAvatarPath: String?
+    let incomingTitle: String
+    var onEdit: (() -> Void)?
+    var onDelete: ((_ revoke: Bool) -> Void)?
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.outgoing {
                 Spacer(minLength: 48)
             } else {
-                AvatarView(title: "С", identifier: message.chatId, imagePath: nil, size: 30)
+                AvatarView(title: incomingTitle, identifier: message.chatId, imagePath: incomingAvatarPath, size: 30)
             }
 
-            VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(message.text.isEmpty ? " " : message.text)
                     .font(.body)
                     .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
-                    .multilineTextAlignment(message.outgoing ? .trailing : .leading)
+                    .multilineTextAlignment(.leading)
                     .strikethrough(message.isDeleted, pattern: .solid, color: .secondary)
                     .padding(.bottom, 12)
 
@@ -63,6 +67,15 @@ struct MessageBubbleView: View {
             if !message.text.isEmpty {
                 Button("Скопировать") {
                     UIPasteboard.general.string = message.text
+                }
+            }
+            if message.outgoing {
+                if let onEdit, !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("Изменить") { onEdit() }
+                }
+                if let onDelete {
+                    Button("Удалить у меня") { onDelete(false) }
+                    Button("Удалить у всех", role: .destructive) { onDelete(true) }
                 }
             }
         }

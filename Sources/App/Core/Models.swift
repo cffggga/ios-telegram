@@ -24,13 +24,22 @@ struct TgChat: Identifiable, Equatable {
     var lastMessagePreview: String?
     var avatarPath: String?
     var statusText: String?
+    var isOnline: Bool?
 
-    init(id: Int64, title: String, lastMessagePreview: String? = nil, avatarPath: String? = nil, statusText: String? = nil) {
+    init(
+        id: Int64,
+        title: String,
+        lastMessagePreview: String? = nil,
+        avatarPath: String? = nil,
+        statusText: String? = nil,
+        isOnline: Bool? = nil
+    ) {
         self.id = id
         self.title = title
         self.lastMessagePreview = lastMessagePreview
         self.avatarPath = avatarPath
         self.statusText = statusText
+        self.isOnline = isOnline
     }
 }
 

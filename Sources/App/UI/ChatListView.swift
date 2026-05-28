@@ -16,9 +16,6 @@ struct ChatListView: View {
         .navigationTitle("Чаты")
         .navigationDestination(for: Int64.self) { chatId in
             ChatDetailView(vm: vm, chatId: chatId)
-                .onAppear {
-                    Task { await vm.selectChat(chatId) }
-                }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -75,7 +72,17 @@ private struct ChatRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(title: chat.title, identifier: chat.id, imagePath: chat.avatarPath, size: 50)
+            ZStack(alignment: .bottomTrailing) {
+                AvatarView(title: chat.title, identifier: chat.id, imagePath: chat.avatarPath, size: 50)
+                Circle()
+                    .fill((chat.isOnline ?? false) ? Color.green : Color.gray.opacity(0.85))
+                    .frame(width: 12, height: 12)
+                    .overlay(
+                        Circle()
+                            .stroke(Color(.systemBackground), lineWidth: 2)
+                    )
+                    .offset(x: 1, y: 1)
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(chat.title)
@@ -85,6 +92,12 @@ private struct ChatRowView: View {
                     Text(preview)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let status = chat.statusText, !status.isEmpty {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle((chat.isOnline ?? false) ? .green : .secondary)
                         .lineLimit(1)
                 }
             }

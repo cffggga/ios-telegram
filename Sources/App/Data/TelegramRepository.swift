@@ -88,6 +88,17 @@ final class TelegramRepository {
         return try await syncMessages(chatId: chatId)
     }
 
+    func edit(chatId: Int64, messageId: Int64, text: String) async throws -> [TgMessage] {
+        try await client.editMessage(chatId: chatId, messageId: messageId, text: text)
+        return try await syncMessages(chatId: chatId)
+    }
+
+    func delete(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws -> [TgMessage] {
+        try await client.deleteMessages(chatId: chatId, messageIds: messageIds, revoke: revoke)
+        // TDLib will also send updateDeleteMessages; we refresh to be safe.
+        return try await syncMessages(chatId: chatId)
+    }
+
     func downloadMedia(chatId: Int64) async throws -> [TgMessage] {
         let current = try store.read(chatId: chatId)
         for message in current {

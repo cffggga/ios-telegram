@@ -11,5 +11,7 @@ protocol TelegramClientProtocol {
     func fetchChats(limit: Int) async throws -> [TgChat]
     func fetchMessages(chatId: Int64, limit: Int) async throws -> [TgMessage]
     func sendMessage(chatId: Int64, text: String) async throws
+    func editMessage(chatId: Int64, messageId: Int64, text: String) async throws
+    func deleteMessages(chatId: Int64, messageIds: [Int64], revoke: Bool) async throws
     func downloadFile(fileId: Int64) async throws -> String?
 }

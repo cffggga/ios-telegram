@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Security
 
 @MainActor
 final class AppViewModel: ObservableObject {
@@ -21,6 +22,7 @@ final class AppViewModel: ObservableObject {
     @Published var selectedChatId: Int64?
     @Published var messages: [TgMessage] = []
     @Published var composeText = ""
+    @Published var editingMessageId: Int64?
     @Published var chatSearch = ""
     @Published var status = ""
     @Published var authState: AuthState = .waitPhone
@@ -225,8 +227,35 @@ final class AppViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            messages = try await repository.send(chatId: chatId, text: text)
+            if let editingMessageId {
+                messages = try await repository.edit(chatId: chatId, messageId: editingMessageId, text: text)
+                self.editingMessageId = nil
+            } else {
+                messages = try await repository.send(chatId: chatId, text: text)
+            }
             composeText = ""
+            await refreshChats()
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func startEditing(_ message: TgMessage) {
+        guard message.outgoing else { return }
+        editingMessageId = message.id
+        composeText = message.text
+    }
+
+    func cancelEditing() {
+        editingMessageId = nil
+    }
+
+    func deleteMyMessage(_ message: TgMessage, revoke: Bool) async {
+        guard let repository, let chatId = selectedChatId, message.outgoing else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            messages = try await repository.delete(chatId: chatId, messageIds: [message.id], revoke: revoke)
             await refreshChats()
         } catch {
             status = error.localizedDescription
@@ -347,6 +376,10 @@ final class AppViewModel: ObservableObject {
 private struct ApiCredentialsStore {
     private let apiIdKey = "telegram.api_id"
     private let apiHashKey = "telegram.api_hash"
+    private let service = "online.maseai.telegramuserclient.credentials"
+    private let account = "telegram.api_credentials"
+    private let bundledApiId = 39444423
+    private let bundledApiHash = "07679c329a2ea28d6b6f1858d5129d01"
 
     struct Saved {
         let apiId: Int
@@ -354,23 +387,103 @@ private struct ApiCredentialsStore {
     }
 
     func load() -> Saved? {
+        if let fromKeychain = loadFromKeychain() {
+            return fromKeychain
+        }
+
+        // One-time migration from old storage.
         let defaults = UserDefaults.standard
         let apiId = defaults.integer(forKey: apiIdKey)
-        guard apiId > 0, let apiHash = defaults.string(forKey: apiHashKey), !apiHash.isEmpty else {
+        if apiId > 0, let apiHash = defaults.string(forKey: apiHashKey), !apiHash.isEmpty {
+            let saved = Saved(apiId: apiId, apiHash: apiHash)
+            saveToKeychain(saved)
+            defaults.removeObject(forKey: apiIdKey)
+            defaults.removeObject(forKey: apiHashKey)
+            return saved
+        }
+
+        let bundled = bundledCredentials()
+        saveToKeychain(bundled)
+        return bundled
+    }
+
+    func save(apiId: Int, apiHash: String) {
+        saveToKeychain(Saved(apiId: apiId, apiHash: apiHash))
+    }
+
+    func clear() {
+        deleteFromKeychain()
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: apiIdKey)
+        defaults.removeObject(forKey: apiHashKey)
+    }
+
+    private func loadFromKeychain() -> Saved? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            return nil
+        }
+
+        guard
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let apiId = object["api_id"] as? Int,
+            let apiHash = object["api_hash"] as? String,
+            apiId > 0,
+            !apiHash.isEmpty
+        else {
             return nil
         }
         return Saved(apiId: apiId, apiHash: apiHash)
     }
 
-    func save(apiId: Int, apiHash: String) {
-        let defaults = UserDefaults.standard
-        defaults.set(apiId, forKey: apiIdKey)
-        defaults.set(apiHash, forKey: apiHashKey)
+    private func bundledCredentials() -> Saved {
+        Saved(apiId: bundledApiId, apiHash: bundledApiHash)
     }
 
-    func clear() {
-        let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: apiIdKey)
-        defaults.removeObject(forKey: apiHashKey)
+    private func saveToKeychain(_ saved: Saved) {
+        guard
+            let data = try? JSONSerialization.data(
+                withJSONObject: ["api_id": saved.apiId, "api_hash": saved.apiHash]
+            )
+        else {
+            return
+        }
+
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        let addStatus = SecItemAdd(attributes as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account
+            ]
+            let update: [String: Any] = [kSecValueData as String: data]
+            SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        }
+    }
+
+    private func deleteFromKeychain() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }
