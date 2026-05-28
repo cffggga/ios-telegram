@@ -75,14 +75,7 @@ private struct ChatRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(AppColors.accent.opacity(0.2))
-                .frame(width: 48, height: 48)
-                .overlay {
-                    Text(chat.title.prefix(1).uppercased())
-                        .font(.headline)
-                        .foregroundStyle(AppColors.accent)
-                }
+            AvatarView(title: chat.title, identifier: chat.id, imagePath: chat.avatarPath, size: 50)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(chat.title)

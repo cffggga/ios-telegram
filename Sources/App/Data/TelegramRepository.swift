@@ -29,6 +29,10 @@ final class TelegramRepository {
             case .newMessage(let message):
                 try? self.store.upsert(messages: [message])
                 self.onMessagesChanged?(message.chatId)
+            case .messageReplaced(let chatId, let oldMessageId, let newMessage):
+                try? self.store.deleteMessage(chatId: chatId, messageId: oldMessageId)
+                try? self.store.upsert(messages: [newMessage])
+                self.onMessagesChanged?(chatId)
             case .messagesDeleted(let chatId, let messageIds):
                 try? self.store.markDeleted(chatId: chatId, messageIds: messageIds)
                 self.onMessagesChanged?(chatId)
@@ -75,6 +79,7 @@ final class TelegramRepository {
     func syncMessages(chatId: Int64) async throws -> [TgMessage] {
         let remote = try await client.fetchMessages(chatId: chatId, limit: 100)
         try store.upsert(messages: remote)
+        try store.cleanupTemporaryOutgoingDuplicates(chatId: chatId)
         return try store.read(chatId: chatId)
     }
 

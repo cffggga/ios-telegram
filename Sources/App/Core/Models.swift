@@ -22,11 +22,13 @@ struct TgChat: Identifiable, Equatable {
     let id: Int64
     let title: String
     var lastMessagePreview: String?
+    var avatarPath: String?
 
-    init(id: Int64, title: String, lastMessagePreview: String? = nil) {
+    init(id: Int64, title: String, lastMessagePreview: String? = nil, avatarPath: String? = nil) {
         self.id = id
         self.title = title
         self.lastMessagePreview = lastMessagePreview
+        self.avatarPath = avatarPath
     }
 }
 
@@ -50,6 +52,7 @@ enum AuthState: Equatable {
 enum TelegramEvent {
     case authChanged(AuthState)
     case newMessage(TgMessage)
+    case messageReplaced(chatId: Int64, oldMessageId: Int64, newMessage: TgMessage)
     case messagesDeleted(chatId: Int64, messageIds: [Int64])
     case chatsChanged
 }

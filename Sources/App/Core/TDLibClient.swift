@@ -131,7 +131,8 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             if let title = chatResp["title"] as? String {
                 let subtitle = chatResp["last_message"] as? [String: Any]
                 let preview = subtitle.flatMap { parseMessage($0, fallbackChatId: id)?.text }
-                chats.append(TgChat(id: id, title: title, lastMessagePreview: preview))
+                let avatarPath = parseChatAvatarPath(chatResp)
+                chats.append(TgChat(id: id, title: title, lastMessagePreview: preview, avatarPath: avatarPath))
             }
         }
         return chats
@@ -308,6 +309,14 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             return
         }
 
+        if type == "updateMessageSendSucceeded",
+           let oldMessageId = int64Value(obj["old_message_id"]),
+           let messageObj = obj["message"] as? [String: Any],
+           let message = parseMessage(messageObj, fallbackChatId: 0) {
+            eventHandler?(.messageReplaced(chatId: message.chatId, oldMessageId: oldMessageId, newMessage: message))
+            return
+        }
+
         if type == "updateDeleteMessages",
            let chatId = int64Value(obj["chat_id"]),
            let idsAny = obj["message_ids"] as? [Any] {
@@ -430,6 +439,19 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    private func parseChatAvatarPath(_ chat: [String: Any]) -> String? {
+        guard
+            let photo = chat["photo"] as? [String: Any],
+            let small = photo["small"] as? [String: Any],
+            let local = small["local"] as? [String: Any],
+            let path = local["path"] as? String,
+            !path.isEmpty
+        else {
+            return nil
+        }
+        return path
     }
 
     private func mapAuthState(from tdType: String) -> AuthState {

@@ -233,6 +233,13 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func quoteMessage(_ message: TgMessage) {
+        let snippet = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !snippet.isEmpty else { return }
+        let author = message.outgoing ? "Вы" : "Собеседник"
+        composeText = "> \(author): \(snippet)\n" + composeText
+    }
+
     func authStepTitle() -> String {
         switch authState {
         case .waitPhone: return "Номер телефона"

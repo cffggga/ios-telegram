@@ -118,6 +118,52 @@ final class LocalMessageStore {
         }
     }
 
+    func deleteMessage(chatId: Int64, messageId: Int64) throws {
+        try queue.sync {
+            let sql = "DELETE FROM messages WHERE chat_id = ? AND message_id = ?;"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw NSError(domain: "LocalMessageStore", code: 15, userInfo: nil)
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, chatId)
+            sqlite3_bind_int64(stmt, 2, messageId)
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw NSError(domain: "LocalMessageStore", code: 16, userInfo: nil)
+            }
+        }
+    }
+
+    func cleanupTemporaryOutgoingDuplicates(chatId: Int64) throws {
+        try queue.sync {
+            // Removes old temporary outgoing messages replaced by server-confirmed copies.
+            let sql = """
+            DELETE FROM messages
+            WHERE chat_id = ?
+              AND message_id < 0
+              AND outgoing = 1
+              AND EXISTS (
+                SELECT 1
+                FROM messages AS confirmed
+                WHERE confirmed.chat_id = messages.chat_id
+                  AND confirmed.outgoing = messages.outgoing
+                  AND confirmed.text = messages.text
+                  AND confirmed.message_id > 0
+                  AND ABS(confirmed.created_at - messages.created_at) <= 10
+              );
+            """
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                throw NSError(domain: "LocalMessageStore", code: 17, userInfo: nil)
+            }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, chatId)
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw NSError(domain: "LocalMessageStore", code: 18, userInfo: nil)
+            }
+        }
+    }
+
     private func createSchema() throws {
         let sql = """
         CREATE TABLE IF NOT EXISTS messages(
