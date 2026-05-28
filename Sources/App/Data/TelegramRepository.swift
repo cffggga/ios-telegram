@@ -84,7 +84,12 @@ final class TelegramRepository {
     }
 
     func send(chatId: Int64, text: String) async throws -> [TgMessage] {
-        try await client.sendMessage(chatId: chatId, text: text)
+        try await client.sendMessage(chatId: chatId, text: text, replyToMessageId: nil)
+        return try await syncMessages(chatId: chatId)
+    }
+
+    func sendReply(chatId: Int64, text: String, replyToMessageId: Int64) async throws -> [TgMessage] {
+        try await client.sendMessage(chatId: chatId, text: text, replyToMessageId: replyToMessageId)
         return try await syncMessages(chatId: chatId)
     }
 
@@ -110,5 +115,9 @@ final class TelegramRepository {
             }
         }
         return try store.read(chatId: chatId)
+    }
+
+    func loadChatProfile(chatId: Int64) async throws -> ChatProfile {
+        try await client.fetchChatProfile(chatId: chatId)
     }
 }

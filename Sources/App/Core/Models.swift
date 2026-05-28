@@ -25,6 +25,8 @@ struct TgChat: Identifiable, Equatable {
     var avatarPath: String?
     var statusText: String?
     var isOnline: Bool?
+    var canSendMessages: Bool?
+    var sendRestrictionText: String?
 
     init(
         id: Int64,
@@ -32,7 +34,9 @@ struct TgChat: Identifiable, Equatable {
         lastMessagePreview: String? = nil,
         avatarPath: String? = nil,
         statusText: String? = nil,
-        isOnline: Bool? = nil
+        isOnline: Bool? = nil,
+        canSendMessages: Bool? = nil,
+        sendRestrictionText: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -40,6 +44,8 @@ struct TgChat: Identifiable, Equatable {
         self.avatarPath = avatarPath
         self.statusText = statusText
         self.isOnline = isOnline
+        self.canSendMessages = canSendMessages
+        self.sendRestrictionText = sendRestrictionText
     }
 }
 
@@ -49,8 +55,29 @@ struct TgMessage: Identifiable, Equatable {
     let text: String
     let outgoing: Bool
     let createdAt: Date
+    let isEdited: Bool
+    let replyToMessageId: Int64?
     let isDeleted: Bool
     let attachments: [TgAttachment]
+}
+
+enum ChatKind: String, Equatable {
+    case `private`
+    case basicGroup
+    case supergroup
+    case channel
+    case unknown
+}
+
+struct ChatProfile: Equatable {
+    let chatId: Int64
+    let title: String
+    let kind: ChatKind
+    let avatarPath: String?
+    let username: String?
+    let description: String?
+    let membersCount: Int?
+    let statusText: String?
 }
 
 enum AuthState: Equatable {

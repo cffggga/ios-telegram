@@ -4,6 +4,7 @@ struct ChatDetailView: View {
     @ObservedObject var vm: AppViewModel
     let chatId: Int64
     @FocusState private var isComposerFocused: Bool
+    @State private var showProfile = false
 
     private var title: String {
         vm.chats.first(where: { $0.id == chatId })?.title ?? "Чат"
@@ -18,16 +19,28 @@ struct ChatDetailView: View {
         return selectedChat?.statusText ?? "был(а) недавно"
     }
 
+    private var canSend: Bool {
+        selectedChat?.canSendMessages ?? true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(vm.messages) { message in
+                            let replyPreview = message.replyToMessageId.flatMap { replyId in
+                                vm.messages.first(where: { $0.id == replyId })?.text
+                            }
                             MessageBubbleView(
                                 message: message,
                                 incomingAvatarPath: selectedChat?.avatarPath,
                                 incomingTitle: title,
+                                replyPreviewText: replyPreview,
+                                onReply: {
+                                    vm.startReply(message)
+                                    isComposerFocused = true
+                                },
                                 onEdit: {
                                     vm.startEditing(message)
                                     isComposerFocused = true
@@ -75,57 +88,97 @@ struct ChatDetailView: View {
 
             Divider()
 
-            HStack(spacing: 12) {
-                TextField("Сообщение", text: $vm.composeText, axis: .vertical)
-                    .lineLimit(1...4)
-                    .focused($isComposerFocused)
-                    .glassField()
+            if !canSend, let reason = selectedChat?.sendRestrictionText {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(AppColors.chatBackground)
+            } else {
+                HStack(spacing: 12) {
+                    if let reply = vm.replyPreviewText(), vm.replyingToMessageId != nil {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Ответ")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button {
+                                    vm.cancelReply()
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(reply)
+                                .font(.caption)
+                                .lineLimit(2)
+                                .foregroundStyle(.primary)
+                        }
+                        .padding(10)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
 
-                if vm.editingMessageId != nil {
+                    TextField("Сообщение", text: $vm.composeText, axis: .vertical)
+                        .lineLimit(1...4)
+                        .focused($isComposerFocused)
+                        .glassField()
+
+                    if vm.editingMessageId != nil {
+                        Button {
+                            vm.cancelEditing()
+                            isComposerFocused = false
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(10)
+                                .background(Color.white.opacity(0.10))
+                                .clipShape(Circle())
+                        }
+                        .disabled(vm.isBusy)
+                    }
+
                     Button {
-                        vm.cancelEditing()
-                        isComposerFocused = false
+                        Task {
+                            await vm.sendMessage()
+                            isComposerFocused = false
+                        }
                     } label: {
-                        Image(systemName: "xmark")
+                        Image(systemName: "paperplane.fill")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.white)
                             .padding(10)
-                            .background(Color.white.opacity(0.10))
+                            .background(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.white.opacity(0.12) : AppColors.accent)
                             .clipShape(Circle())
                     }
-                    .disabled(vm.isBusy)
+                    .disabled(vm.isBusy || vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-
-                Button {
-                    Task {
-                        await vm.sendMessage()
-                        isComposerFocused = false
-                    }
-                } label: {
-                    Image(systemName: "paperplane.fill")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.white)
-                        .padding(10)
-                        .background(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.white.opacity(0.12) : AppColors.accent)
-                        .clipShape(Circle())
-                }
-                .disabled(vm.isBusy || vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(AppColors.chatBackground)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(AppColors.chatBackground)
         }
         .background(AppColors.chatBackground)
         .preferredColorScheme(.dark)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            // Load chat immediately on entry
+        .onAppear {
+            Task { await vm.selectChat(chatId) }
+        }
+        .task(id: chatId) {
+            // Always load immediately when entering/switching chat
             await vm.selectChat(chatId)
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 8) {
+                Button {
+                    showProfile = true
+                } label: {
+                    HStack(spacing: 8) {
                     AvatarView(
                         title: title,
                         identifier: chatId,
@@ -140,7 +193,9 @@ struct ChatDetailView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    }
                 }
+                .buttonStyle(.plain)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -153,6 +208,25 @@ struct ChatDetailView: View {
         }
         .refreshable {
             await vm.refreshMessages()
+        }
+        .sheet(isPresented: $showProfile) {
+            NavigationStack {
+                Group {
+                    if let profile = vm.chatProfile {
+                        ChatProfileView(profile: profile)
+                    } else if vm.isProfileLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Text("Не удалось загрузить профиль")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }
+            .task {
+                await vm.loadProfile(chatId: chatId)
+            }
         }
     }
 }

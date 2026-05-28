@@ -1,16 +1,13 @@
 import SwiftUI
-import UIKit
 
 struct MessageBubbleView: View {
     let message: TgMessage
     let incomingAvatarPath: String?
     let incomingTitle: String
+    var replyPreviewText: String?
+    var onReply: (() -> Void)?
     var onEdit: (() -> Void)?
     var onDelete: ((_ revoke: Bool) -> Void)?
-
-    private var maxBubbleWidth: CGFloat {
-        UIScreen.main.bounds.width * 0.72
-    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -22,6 +19,27 @@ struct MessageBubbleView: View {
 
             ZStack(alignment: .bottomTrailing) {
                 VStack(alignment: .leading, spacing: 6) {
+                    if let replyId = message.replyToMessageId {
+                        HStack(spacing: 8) {
+                            Rectangle()
+                                .fill(AppColors.accent)
+                                .frame(width: 2)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Ответ")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(replyPreviewText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                     ? (replyPreviewText ?? "")
+                                     : "Сообщение #\(replyId)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                     Text(message.text.isEmpty ? " " : message.text)
                         .font(.body)
                         .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
@@ -44,6 +62,11 @@ struct MessageBubbleView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    if message.isEdited {
+                        Text("edited")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                     Text(message.createdAt, style: .time)
                         .font(.caption2)
                         .foregroundStyle(message.outgoing ? AppColors.outgoingText.opacity(0.8) : .secondary)
@@ -56,7 +79,8 @@ struct MessageBubbleView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .frame(maxWidth: maxBubbleWidth, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: UIScreen.main.bounds.width * 0.72, alignment: .leading)
             .background(message.outgoing ? AppColors.outgoingBubble : AppColors.incomingBubble)
             .clipShape(BubbleShape(isOutgoing: message.outgoing))
 
@@ -80,6 +104,9 @@ struct MessageBubbleView: View {
                     Button("Удалить у меня") { onDelete(false) }
                     Button("Удалить у всех", role: .destructive) { onDelete(true) }
                 }
+            }
+            if let onReply {
+                Button("Ответить") { onReply() }
             }
         }
     }

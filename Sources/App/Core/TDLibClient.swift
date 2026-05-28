@@ -133,6 +133,7 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                 let preview = subtitle.flatMap { parseMessage($0, fallbackChatId: id)?.text }
                 let avatarPath = try await resolveChatAvatarPath(chatResp)
                 let statusInfo = try await resolveChatStatusInfo(chatResp)
+                let sendInfo = try await resolveChatSendPermissions(chatResp)
                 chats.append(
                     TgChat(
                         id: id,
@@ -140,7 +141,9 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                         lastMessagePreview: preview,
                         avatarPath: avatarPath,
                         statusText: statusInfo.text,
-                        isOnline: statusInfo.isOnline
+                        isOnline: statusInfo.isOnline,
+                        canSendMessages: sendInfo.canSend,
+                        sendRestrictionText: sendInfo.reason
                     )
                 )
             }
@@ -162,8 +165,8 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             .sorted(by: { $0.createdAt < $1.createdAt })
     }
 
-    func sendMessage(chatId: Int64, text: String) async throws {
-        _ = try await sendRequest([
+    func sendMessage(chatId: Int64, text: String, replyToMessageId: Int64?) async throws {
+        var body: [String: Any] = [
             "@type": "sendMessage",
             "chat_id": chatId,
             "input_message_content": [
@@ -173,7 +176,16 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                     "text": text
                 ]
             ]
-        ])
+        ]
+
+        if let replyToMessageId {
+            body["reply_to"] = [
+                "@type": "inputMessageReplyToMessage",
+                "message_id": replyToMessageId
+            ]
+        }
+
+        _ = try await sendRequest(body)
     }
 
     func editMessage(chatId: Int64, messageId: Int64, text: String) async throws {
@@ -217,6 +229,108 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             return path
         }
         return nil
+    }
+
+    func fetchChatProfile(chatId: Int64) async throws -> ChatProfile {
+        let chat = try await sendRequest([
+            "@type": "getChat",
+            "chat_id": chatId
+        ])
+
+        let title = (chat["title"] as? String) ?? "Чат"
+        let avatarPath = try await resolveChatAvatarPath(chat)
+        let statusInfo = try await resolveChatStatusInfo(chat)
+
+        guard
+            let type = chat["type"] as? [String: Any],
+            let typeName = type["@type"] as? String
+        else {
+            return ChatProfile(
+                chatId: chatId,
+                title: title,
+                kind: .unknown,
+                avatarPath: avatarPath,
+                username: nil,
+                description: nil,
+                membersCount: nil,
+                statusText: statusInfo.text
+            )
+        }
+
+        switch typeName {
+        case "chatTypePrivate":
+            if let userId = int64Value(type["user_id"]) {
+                let user = try await sendRequest([
+                    "@type": "getUser",
+                    "user_id": userId
+                ])
+                let username = (user["usernames"] as? [String: Any]).flatMap { $0["active_usernames"] as? [String] }?.first
+                    ?? (user["username"] as? String)
+                return ChatProfile(
+                    chatId: chatId,
+                    title: title,
+                    kind: .private,
+                    avatarPath: avatarPath,
+                    username: username,
+                    description: nil,
+                    membersCount: nil,
+                    statusText: statusInfo.text
+                )
+            }
+            fallthrough
+        case "chatTypeBasicGroup":
+            if let groupId = int64Value(type["basic_group_id"]) {
+                let group = try await sendRequest([
+                    "@type": "getBasicGroup",
+                    "basic_group_id": groupId
+                ])
+                let members = (group["member_count"] as? Int)
+                return ChatProfile(
+                    chatId: chatId,
+                    title: title,
+                    kind: .basicGroup,
+                    avatarPath: avatarPath,
+                    username: nil,
+                    description: nil,
+                    membersCount: members,
+                    statusText: nil
+                )
+            }
+            fallthrough
+        case "chatTypeSupergroup":
+            if let sgId = int64Value(type["supergroup_id"]) {
+                let sg = try await sendRequest([
+                    "@type": "getSupergroup",
+                    "supergroup_id": sgId
+                ])
+                let isChannel = (sg["is_channel"] as? Bool) ?? false
+                let username = sg["username"] as? String
+                let members = sg["member_count"] as? Int
+                let desc = sg["description"] as? String
+                return ChatProfile(
+                    chatId: chatId,
+                    title: title,
+                    kind: isChannel ? .channel : .supergroup,
+                    avatarPath: avatarPath,
+                    username: username,
+                    description: desc,
+                    membersCount: members,
+                    statusText: nil
+                )
+            }
+            fallthrough
+        default:
+            return ChatProfile(
+                chatId: chatId,
+                title: title,
+                kind: .unknown,
+                avatarPath: avatarPath,
+                username: nil,
+                description: nil,
+                membersCount: nil,
+                statusText: statusInfo.text
+            )
+        }
     }
 
     private func startReceiveLoopIfNeeded() {
@@ -372,6 +486,20 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         let chatId = int64Value(obj["chat_id"]) ?? fallbackChatId
         let dateUnix = (obj["date"] as? Double) ?? Date().timeIntervalSince1970
         let isOutgoing = (obj["is_outgoing"] as? Bool) ?? false
+        let editDate = int64Value(obj["edit_date"]) ?? 0
+        let isEdited = editDate > 0
+
+        var replyToMessageId: Int64?
+        if let replyTo = obj["reply_to"] as? [String: Any] {
+            if let messageId = int64Value(replyTo["message_id"]) {
+                replyToMessageId = messageId
+            } else if
+                let replyType = replyTo["@type"] as? String,
+                replyType == "messageReplyToMessage",
+                let messageId = int64Value(replyTo["message_id"]) {
+                replyToMessageId = messageId
+            }
+        }
 
         var text = ""
         if let content = obj["content"] as? [String: Any],
@@ -391,6 +519,8 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             text: text,
             outgoing: isOutgoing,
             createdAt: Date(timeIntervalSince1970: dateUnix),
+            isEdited: isEdited,
+            replyToMessageId: replyToMessageId,
             isDeleted: false,
             attachments: parseAttachments(obj["content"] as? [String: Any])
         )
@@ -522,6 +652,49 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         }
 
         return (nil, nil)
+    }
+
+    private func resolveChatSendPermissions(_ chat: [String: Any]) async throws -> (canSend: Bool?, reason: String?) {
+        // 1) If TDLib provided chat permissions directly (groups), trust it.
+        if let permissions = chat["permissions"] as? [String: Any] {
+            if let canSend = permissions["can_send_messages"] as? Bool {
+                return (canSend, canSend ? nil : "Запрещено отправлять сообщения")
+            }
+        }
+
+        // 2) Supergroups/channels: if it's a channel, usually нельзя писать (только постить, если админ).
+        if
+            let type = chat["type"] as? [String: Any],
+            let typeName = type["@type"] as? String,
+            typeName == "chatTypeSupergroup",
+            let supergroupId = int64Value(type["supergroup_id"])
+        {
+            let sg = try await sendRequest([
+                "@type": "getSupergroup",
+                "supergroup_id": supergroupId
+            ])
+
+            let isChannel = (sg["is_channel"] as? Bool) ?? false
+            if isChannel {
+                // If admin with posting rights, allow.
+                if
+                    let status = sg["status"] as? [String: Any],
+                    let statusType = status["@type"] as? String,
+                    statusType.contains("Administrator"),
+                    let canPost = status["can_post_messages"] as? Bool,
+                    canPost == true
+                {
+                    return (true, nil)
+                }
+                return (false, "Это канал — отправка сообщений недоступна")
+            }
+
+            // Non-channel supergroup: allow by default unless restricted (we'll refine later).
+            return (true, nil)
+        }
+
+        // 3) Private chats: allow.
+        return (true, nil)
     }
 
     private func mapUserStatus(_ status: [String: Any]) -> (text: String, isOnline: Bool) {

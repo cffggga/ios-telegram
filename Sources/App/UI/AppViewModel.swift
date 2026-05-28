@@ -23,6 +23,9 @@ final class AppViewModel: ObservableObject {
     @Published var messages: [TgMessage] = []
     @Published var composeText = ""
     @Published var editingMessageId: Int64?
+    @Published var replyingToMessageId: Int64?
+    @Published var chatProfile: ChatProfile?
+    @Published var isProfileLoading = false
     @Published var chatSearch = ""
     @Published var status = ""
     @Published var authState: AuthState = .waitPhone
@@ -230,10 +233,16 @@ final class AppViewModel: ObservableObject {
             if let editingMessageId {
                 messages = try await repository.edit(chatId: chatId, messageId: editingMessageId, text: text)
                 self.editingMessageId = nil
+                self.replyingToMessageId = nil
             } else {
-                messages = try await repository.send(chatId: chatId, text: text)
+                if let replyId = replyingToMessageId {
+                    messages = try await repository.sendReply(chatId: chatId, text: text, replyToMessageId: replyId)
+                } else {
+                    messages = try await repository.send(chatId: chatId, text: text)
+                }
             }
             composeText = ""
+            replyingToMessageId = nil
             await refreshChats()
         } catch {
             status = error.localizedDescription
@@ -369,6 +378,30 @@ final class AppViewModel: ObservableObject {
         } catch {
             bootstrapError = error.localizedDescription
             status = "Не удалось пересоздать TDLib клиент: \(error.localizedDescription)"
+        }
+    }
+
+    func startReply(_ message: TgMessage) {
+        replyingToMessageId = message.id
+    }
+
+    func cancelReply() {
+        replyingToMessageId = nil
+    }
+
+    func replyPreviewText() -> String? {
+        guard let id = replyingToMessageId else { return nil }
+        return messages.first(where: { $0.id == id })?.text
+    }
+
+    func loadProfile(chatId: Int64) async {
+        guard let repository else { return }
+        isProfileLoading = true
+        defer { isProfileLoading = false }
+        do {
+            chatProfile = try await repository.loadChatProfile(chatId: chatId)
+        } catch {
+            status = error.localizedDescription
         }
     }
 }
