@@ -4,24 +4,30 @@ enum Glass {
     static func fieldBackground() -> some ShapeStyle { .ultraThinMaterial }
 }
 
-private extension View {
+public extension View {
     @ViewBuilder
-    func applyLiquidGlassIfAvailable() -> some View {
+    func applyLiquidGlassIfAvailable(cornerRadius: CGFloat = 18, interactive: Bool = false) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
-            self.glassEffect()
+            if interactive {
+                self.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+            } else {
+                self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+            }
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 }
 
-struct GlassButton: ButtonStyle {
+private struct LegacyGlassButton: ButtonStyle {
     var prominent: Bool = false
     var cornerRadius: CGFloat = 18
 
     func makeBody(configuration: Configuration) -> some View {
-        // NOTE: Apple’s Liquid Glass button styles are not available in all SwiftUI toolchains yet.
-        // We keep our own look and add Liquid Glass via glassEffect() when iOS 26+ is available.
         configuration.label
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -36,7 +42,6 @@ struct GlassButton: ButtonStyle {
                     .stroke(Color.white.opacity(prominent ? 0.10 : 0.18), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .applyLiquidGlassIfAvailable()
             .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
@@ -51,12 +56,7 @@ struct GlassField: ViewModifier {
                 content
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .applyLiquidGlassIfAvailable()
+                    .applyLiquidGlassIfAvailable(cornerRadius: cornerRadius, interactive: true)
             } else {
                 content
                     .padding(.horizontal, 14)
@@ -67,6 +67,7 @@ struct GlassField: ViewModifier {
                             .stroke(Color.white.opacity(0.18), lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .applyLiquidGlassIfAvailable()
             }
         }
     }
@@ -77,8 +78,31 @@ extension View {
         modifier(GlassField())
     }
 
+    @ViewBuilder
     func glassButton(prominent: Bool = false) -> some View {
-        buttonStyle(GlassButton(prominent: prominent))
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            if prominent {
+                self.buttonStyle(.glassProminent)
+            } else {
+                self.buttonStyle(.glass)
+            }
+        } else {
+            self.buttonStyle(LegacyGlassButton(prominent: prominent))
+        }
+        #else
+        self.buttonStyle(LegacyGlassButton(prominent: prominent))
+        #endif
+    }
+
+    @ViewBuilder
+    func glassContainer(cornerRadius: CGFloat = 18) -> some View {
+        if #available(iOS 26.0, *) {
+            self.applyLiquidGlassIfAvailable(cornerRadius: cornerRadius)
+        } else {
+            self
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        }
     }
 }
-

@@ -238,7 +238,7 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         ])
 
         let title = (chat["title"] as? String) ?? "Чат"
-        let avatarPath = try await resolveChatAvatarPath(chat)
+        let avatarPath = try await resolveChatAvatarPath(chat, preferBig: true)
         let statusInfo = try await resolveChatStatusInfo(chat)
 
         guard
@@ -469,8 +469,10 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         if type == "updateDeleteMessages",
            let chatId = int64Value(obj["chat_id"]),
            let idsAny = obj["message_ids"] as? [Any] {
+            let isPermanent = (obj["is_permanent"] as? Bool) ?? false
+            let fromCache = (obj["from_cache"] as? Bool) ?? false
             let ids = idsAny.compactMap(int64Value)
-            if !ids.isEmpty {
+            if isPermanent, !fromCache, !ids.isEmpty {
                 eventHandler?(.messagesDeleted(chatId: chatId, messageIds: ids))
             }
             return
@@ -508,6 +510,11 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                let textObj = content["text"] as? [String: Any],
                let rawText = textObj["text"] as? String {
                 text = rawText
+            } else if let captionObj = content["caption"] as? [String: Any],
+                      let caption = captionObj["text"] as? String {
+                text = caption
+            } else if isRenderableAttachmentContent(contentType) {
+                text = ""
             } else {
                 text = "[\(contentType)]"
             }
@@ -532,62 +539,88 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         switch contentType {
         case "messagePhoto":
             guard let photo = content["photo"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: photo["sizes"])
             return [TgAttachment(
                 id: UUID().uuidString,
                 kind: .photo,
-                fileId: extractFileId(from: photo["sizes"]),
+                fileId: fileInfo.id,
                 fileName: nil,
                 mimeType: "image/*",
-                size: nil,
-                localPath: nil
+                size: fileInfo.size,
+                localPath: fileInfo.localPath
             )]
         case "messageVideo":
             guard let video = content["video"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: video["video"])
             return [TgAttachment(
                 id: UUID().uuidString,
                 kind: .video,
-                fileId: extractFileId(from: video["video"]),
+                fileId: fileInfo.id,
                 fileName: video["file_name"] as? String,
                 mimeType: video["mime_type"] as? String,
-                size: int64Value(video["size"]),
-                localPath: nil
+                size: fileInfo.size ?? int64Value(video["size"]),
+                localPath: fileInfo.localPath
             )]
         case "messageVoiceNote":
             guard let voice = content["voice_note"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: voice["voice"])
             return [TgAttachment(
                 id: UUID().uuidString,
                 kind: .voice,
-                fileId: extractFileId(from: voice["voice"]),
+                fileId: fileInfo.id,
                 fileName: nil,
                 mimeType: voice["mime_type"] as? String,
-                size: int64Value(voice["size"]),
-                localPath: nil
+                size: fileInfo.size ?? int64Value(voice["size"]),
+                localPath: fileInfo.localPath
             )]
         case "messageVideoNote":
             guard let note = content["video_note"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: note["video"])
             return [TgAttachment(
                 id: UUID().uuidString,
                 kind: .videoNote,
-                fileId: extractFileId(from: note["video"]),
+                fileId: fileInfo.id,
                 fileName: nil,
                 mimeType: "video/*",
-                size: int64Value(note["size"]),
-                localPath: nil
+                size: fileInfo.size ?? int64Value(note["size"]),
+                localPath: fileInfo.localPath
             )]
         case "messageDocument":
             guard let doc = content["document"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: doc["document"])
             return [TgAttachment(
                 id: UUID().uuidString,
                 kind: .document,
-                fileId: extractFileId(from: doc["document"]),
+                fileId: fileInfo.id,
                 fileName: doc["file_name"] as? String,
                 mimeType: doc["mime_type"] as? String,
-                size: int64Value(doc["size"]),
-                localPath: nil
+                size: fileInfo.size ?? int64Value(doc["size"]),
+                localPath: fileInfo.localPath
             )]
         default:
             return []
         }
+    }
+
+    private func extractFileInfo(from source: Any?) -> (id: Int64?, localPath: String?, size: Int64?) {
+        if let file = source as? [String: Any] {
+            return fileInfo(file)
+        }
+        if let sizes = source as? [[String: Any]] {
+            for item in sizes.reversed() {
+                if let photo = item["photo"] as? [String: Any] {
+                    return fileInfo(photo)
+                }
+            }
+        }
+        return (nil, nil, nil)
+    }
+
+    private func fileInfo(_ file: [String: Any]) -> (id: Int64?, localPath: String?, size: Int64?) {
+        let local = file["local"] as? [String: Any]
+        let path = (local?["path"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let size = int64Value(file["size"]) ?? int64Value(file["expected_size"])
+        return (int64Value(file["id"]), path, size)
     }
 
     private func extractFileId(from source: Any?) -> Int64? {
@@ -606,26 +639,42 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         return nil
     }
 
-    private func resolveChatAvatarPath(_ chat: [String: Any]) async throws -> String? {
+    private func isRenderableAttachmentContent(_ contentType: String) -> Bool {
+        switch contentType {
+        case "messagePhoto", "messageVideo", "messageVoiceNote", "messageVideoNote", "messageDocument":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func resolveChatAvatarPath(_ chat: [String: Any], preferBig: Bool = false) async throws -> String? {
         guard
             let photo = chat["photo"] as? [String: Any],
-            let small = photo["small"] as? [String: Any]
+            let file = preferredAvatarFile(from: photo, preferBig: preferBig)
         else {
             return nil
         }
 
         if
-            let local = small["local"] as? [String: Any],
+            let local = file["local"] as? [String: Any],
             let path = local["path"] as? String,
             !path.isEmpty {
             return path
         }
 
-        if let fileId = int64Value(small["id"]) {
+        if let fileId = int64Value(file["id"]) {
             return try await downloadFile(fileId: fileId)
         }
 
         return nil
+    }
+
+    private func preferredAvatarFile(from photo: [String: Any], preferBig: Bool) -> [String: Any]? {
+        if preferBig {
+            return (photo["big"] as? [String: Any]) ?? (photo["small"] as? [String: Any])
+        }
+        return (photo["small"] as? [String: Any]) ?? (photo["big"] as? [String: Any])
     }
 
     private func resolveChatStatusInfo(_ chat: [String: Any]) async throws -> (text: String?, isOnline: Bool?) {

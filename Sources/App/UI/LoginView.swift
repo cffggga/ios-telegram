@@ -61,7 +61,7 @@ struct LoginView: View {
                         .fontWeight(.semibold)
                 }
             }
-            .glassButton(prominent: true)
+            .glassButton(prominent: false)
             .disabled(vm.isBusy || vm.authState == .ready)
             .padding(.horizontal, 24)
             .padding(.bottom, 24)

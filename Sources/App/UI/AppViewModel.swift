@@ -33,6 +33,7 @@ final class AppViewModel: ObservableObject {
     @Published var bootstrapError: String?
 
     private var repository: TelegramRepository?
+    private var mediaDownloadsInProgress: Set<Int64> = []
     private var isTdlibConfigured = false
     private let credentials = ApiCredentialsStore()
 
@@ -216,7 +217,41 @@ final class AppViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            messages = try await repository.syncMessages(chatId: chatId)
+            let syncedMessages = try await repository.syncMessages(chatId: chatId)
+            messages = syncedMessages
+            scheduleMediaDownloadIfNeeded(chatId: chatId, messages: syncedMessages)
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    private func scheduleMediaDownloadIfNeeded(chatId: Int64, messages: [TgMessage]) {
+        let hasMissingMedia = messages.contains { message in
+            message.attachments.contains { attachment in
+                attachment.kind != .document && attachment.fileId != nil && (attachment.localPath?.isEmpty ?? true)
+            }
+        }
+        guard hasMissingMedia, !mediaDownloadsInProgress.contains(chatId) else { return }
+
+        mediaDownloadsInProgress.insert(chatId)
+        Task { [weak self] in
+            await self?.downloadMedia(chatId: chatId)
+        }
+    }
+
+    private func downloadMedia(chatId: Int64) async {
+        guard let repository else {
+            mediaDownloadsInProgress.remove(chatId)
+            return
+        }
+
+        defer { mediaDownloadsInProgress.remove(chatId) }
+
+        do {
+            let downloadedMessages = try await repository.downloadMedia(chatId: chatId)
+            if selectedChatId == chatId {
+                messages = downloadedMessages
+            }
         } catch {
             status = error.localizedDescription
         }

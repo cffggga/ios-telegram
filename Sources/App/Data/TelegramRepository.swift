@@ -108,7 +108,7 @@ final class TelegramRepository {
         let current = try store.read(chatId: chatId)
         for message in current {
             for attachment in message.attachments {
-                guard attachment.localPath == nil, let fileId = attachment.fileId else { continue }
+                guard attachment.kind != .document, (attachment.localPath?.isEmpty ?? true), let fileId = attachment.fileId else { continue }
                 if let path = try await client.downloadFile(fileId: fileId) {
                     try store.setAttachmentLocalPath(messageId: message.id, fileId: fileId, localPath: path)
                 }

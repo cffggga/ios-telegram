@@ -1,10 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct MessageBubbleView: View {
     let message: TgMessage
     let incomingAvatarPath: String?
     let incomingTitle: String
     var replyPreviewText: String?
+    var onOpenAttachment: ((TgAttachment) -> Void)?
     var onReply: (() -> Void)?
     var onEdit: (() -> Void)?
     var onDelete: ((_ revoke: Bool) -> Void)?
@@ -40,17 +42,19 @@ struct MessageBubbleView: View {
                                 .lineLimit(1)
                         }
                     }
-                    Text(message.text.isEmpty ? " " : message.text)
-                        .font(.body)
-                        .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
-                        .multilineTextAlignment(.leading)
-                        .strikethrough(message.isDeleted, pattern: .solid, color: .secondary)
+                    if !message.text.isEmpty || message.attachments.isEmpty {
+                        Text(message.text.isEmpty ? " " : message.text)
+                            .font(.body)
+                            .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
+                            .multilineTextAlignment(.leading)
+                            .strikethrough(message.isDeleted, pattern: .solid, color: .secondary)
+                    }
 
                     if !message.attachments.isEmpty {
                         ForEach(message.attachments) { attachment in
-                            Text(attachmentCaption(attachment))
-                                .font(.caption)
-                                .foregroundStyle(AppColors.accent)
+                            MessageAttachmentPreview(attachment: attachment) {
+                                onOpenAttachment?(attachment)
+                            }
                         }
                     }
                 }
@@ -108,16 +112,6 @@ struct MessageBubbleView: View {
             if let onReply {
                 Button("Ответить") { onReply() }
             }
-        }
-    }
-
-    private func attachmentCaption(_ attachment: TgAttachment) -> String {
-        switch attachment.kind {
-        case .photo: return "Фото"
-        case .video: return attachment.fileName ?? "Видео"
-        case .voice: return "Голосовое"
-        case .videoNote: return "Кружок"
-        case .document: return attachment.fileName ?? "Файл"
         }
     }
 }

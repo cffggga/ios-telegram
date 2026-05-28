@@ -47,12 +47,7 @@ struct SetupCredentialsView: View {
                         .glassField()
                 }
                 .padding()
-                .background(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .glassContainer(cornerRadius: 22)
 
                 Button {
                     Task { await vm.saveAndConnect() }
@@ -66,7 +61,7 @@ struct SetupCredentialsView: View {
                             .fontWeight(.semibold)
                     }
                 }
-                .glassButton(prominent: true)
+                .glassButton(prominent: false)
                 .disabled(vm.isBusy)
 
                 if !vm.status.isEmpty {
