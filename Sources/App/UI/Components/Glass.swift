@@ -53,8 +53,9 @@ struct GlassField: ViewModifier {
                     .padding(.vertical, 12)
                     .background(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(.clear)
+                            .fill(.ultraThinMaterial)
                     )
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                     .applyLiquidGlassIfAvailable()
             } else {
                 content
