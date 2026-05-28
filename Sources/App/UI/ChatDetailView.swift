@@ -30,7 +30,7 @@ struct ChatDetailView: View {
                 bottomBar
             }
         .background(AppColors.chatBackground.ignoresSafeArea())
-        .preferredColorScheme(.dark)
+        .toolbar(.hidden, for: .tabBar)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -64,14 +64,6 @@ struct ChatDetailView: View {
                 }
                 .buttonStyle(.plain)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await vm.refreshMessages() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .disabled(vm.isBusy)
-            }
         }
         .refreshable {
             await vm.refreshMessages()
@@ -80,7 +72,7 @@ struct ChatDetailView: View {
             NavigationStack {
                 Group {
                     if let profile = vm.chatProfile {
-                        ChatProfileView(profile: profile)
+                        ChatProfileView(vm: vm, profile: profile)
                     } else if vm.isProfileLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)

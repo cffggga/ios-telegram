@@ -34,7 +34,7 @@ struct AvatarView: View {
 
     private func loadAvatarImage() -> UIImage? {
         guard let imagePath, !imagePath.isEmpty else { return nil }
-        return UIImage(contentsOfFile: imagePath)
+        return LocalImageCache.shared.image(path: imagePath)
     }
 
     private func avatarInitials(_ value: String) -> String {

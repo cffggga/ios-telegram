@@ -17,8 +17,20 @@ struct AppShellView: View {
                     LoginView(vm: vm)
                 }
             case .main:
-                NavigationStack {
-                    ChatListView(vm: vm)
+                TabView {
+                    NavigationStack {
+                        ChatListView(vm: vm)
+                    }
+                    .tabItem {
+                        Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                    }
+
+                    NavigationStack {
+                        SettingsView(vm: vm)
+                    }
+                    .tabItem {
+                        Label("Settings", systemImage: "gearshape")
+                    }
                 }
                 .tint(AppColors.accent)
             }

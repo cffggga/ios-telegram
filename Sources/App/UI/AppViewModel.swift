@@ -25,7 +25,10 @@ final class AppViewModel: ObservableObject {
     @Published var editingMessageId: Int64?
     @Published var replyingToMessageId: Int64?
     @Published var chatProfile: ChatProfile?
+    @Published var chatMembers: [ChatMember] = []
+    @Published var chatMediaMessages: [TgMessage] = []
     @Published var isProfileLoading = false
+    @Published var isProfileDetailsLoading = false
     @Published var chatSearch = ""
     @Published var status = ""
     @Published var authState: AuthState = .waitPhone
@@ -34,6 +37,7 @@ final class AppViewModel: ObservableObject {
 
     private var repository: TelegramRepository?
     private var mediaDownloadsInProgress: Set<Int64> = []
+    private var typingClearTasks: [Int64: Task<Void, Never>] = [:]
     private var isTdlibConfigured = false
     private let credentials = ApiCredentialsStore()
 
@@ -200,7 +204,14 @@ final class AppViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            chats = try await repository.loadChats()
+            let typingByChat = Dictionary(uniqueKeysWithValues: chats.compactMap { chat in
+                chat.typingText.map { (chat.id, $0) }
+            })
+            chats = sortChats(try await repository.loadChats()).map { chat in
+                var updated = chat
+                updated.typingText = typingByChat[chat.id]
+                return updated
+            }
             status = ""
         } catch {
             status = error.localizedDescription
@@ -210,6 +221,7 @@ final class AppViewModel: ObservableObject {
     func selectChat(_ chatId: Int64) async {
         selectedChatId = chatId
         await refreshMessages()
+        await markChatRead(chatId)
     }
 
     func refreshMessages() async {
@@ -228,7 +240,7 @@ final class AppViewModel: ObservableObject {
     private func scheduleMediaDownloadIfNeeded(chatId: Int64, messages: [TgMessage]) {
         let hasMissingMedia = messages.contains { message in
             message.attachments.contains { attachment in
-                attachment.kind != .document && attachment.fileId != nil && (attachment.localPath?.isEmpty ?? true)
+                attachment.fileId != nil && (attachment.localPath?.isEmpty ?? true)
             }
         }
         guard hasMissingMedia, !mediaDownloadsInProgress.contains(chatId) else { return }
@@ -346,16 +358,31 @@ final class AppViewModel: ObservableObject {
         repository.onMessagesChanged = { [weak self] chatId in
             guard let self else { return }
             Task { @MainActor in
-                if self.selectedChatId == chatId {
-                    await self.refreshMessages()
-                }
-                await self.refreshChats()
+            if self.selectedChatId == chatId {
+                await self.refreshMessages()
+                await self.markChatRead(chatId)
+            }
             }
         }
 
         repository.onChatsChanged = { [weak self] in
             Task { @MainActor in
                 await self?.refreshChats()
+            }
+        }
+
+        repository.onChatChanged = { [weak self] chatId in
+            Task { @MainActor in
+                await self?.refreshChats()
+                if self?.selectedChatId == chatId {
+                    await self?.markChatRead(chatId)
+                }
+            }
+        }
+
+        repository.onTypingChanged = { [weak self] chatId, text in
+            Task { @MainActor in
+                self?.applyTyping(text, for: chatId)
             }
         }
     }
@@ -435,6 +462,25 @@ final class AppViewModel: ObservableObject {
         defer { isProfileLoading = false }
         do {
             chatProfile = try await repository.loadChatProfile(chatId: chatId)
+            await loadProfileDetails(chatId: chatId)
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func loadProfileDetails(chatId: Int64) async {
+        guard let repository else { return }
+        isProfileDetailsLoading = true
+        defer { isProfileDetailsLoading = false }
+
+        do {
+            chatMembers = try await repository.loadChatMembers(chatId: chatId)
+        } catch {
+            status = error.localizedDescription
+        }
+
+        do {
+            chatMediaMessages = try await repository.loadChatMedia(chatId: chatId)
         } catch {
             status = error.localizedDescription
         }

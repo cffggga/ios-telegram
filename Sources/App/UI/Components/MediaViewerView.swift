@@ -6,6 +6,8 @@ import UIKit
 struct MessageAttachmentPreview: View {
     let attachment: TgAttachment
     var onOpen: (() -> Void)?
+    @State private var inlinePlayer: AVPlayer?
+    @State private var isInlinePlaying = false
 
     var body: some View {
         switch attachment.kind {
@@ -15,6 +17,10 @@ struct MessageAttachmentPreview: View {
             videoPreview(isRound: false)
         case .videoNote:
             videoPreview(isRound: true)
+        case .animation:
+            videoPreview(isRound: false)
+        case .sticker:
+            stickerPreview
         case .voice:
             InlineVoicePlayer(attachment: attachment, onOpen: onOpen)
         case .document:
@@ -51,35 +57,60 @@ struct MessageAttachmentPreview: View {
     }
 
     private func videoPreview(isRound: Bool) -> some View {
-        Button {
-            onOpen?()
-        } label: {
-            if isRound {
-                videoPreviewContent(title: "Кружок загружается")
-                    .frame(width: 170, height: 170)
-                    .clipShape(Circle())
-            } else {
-                videoPreviewContent(title: "Видео загружается")
-                    .frame(height: 180)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if isRound {
+                    videoPreviewContent(title: "Кружок загружается")
+                        .frame(width: 170, height: 170)
+                        .clipShape(Circle())
+                } else {
+                    videoPreviewContent(title: attachment.kind == .animation ? "GIF загружается" : "Видео загружается")
+                        .frame(height: 180)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: toggleInlinePlayback)
+
+            if attachment.localURL != nil {
+                Button {
+                    onOpen?()
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Color.black.opacity(0.36))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(8)
             }
         }
-        .buttonStyle(.plain)
-        .disabled(attachment.localURL == nil)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onDisappear {
+            inlinePlayer?.pause()
+            isInlinePlaying = false
+        }
     }
 
     private func videoPreviewContent(title: String) -> some View {
         ZStack {
-            VideoThumbnailView(url: attachment.localURL)
+            if isInlinePlaying, let inlinePlayer {
+                VideoPlayer(player: inlinePlayer)
+            } else {
+                VideoThumbnailView(url: attachment.localURL)
+            }
 
-            Image(systemName: "play.fill")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 54, height: 54)
-                .background(Color.black.opacity(0.36))
-                .clipShape(Circle())
+            if !isInlinePlaying {
+                Image(systemName: "play.fill")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 54, height: 54)
+                    .background(Color.black.opacity(0.36))
+                    .clipShape(Circle())
+            }
 
             if attachment.localURL == nil {
                 VStack(spacing: 8) {
@@ -94,28 +125,66 @@ struct MessageAttachmentPreview: View {
         }
     }
 
-    private var documentPreview: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "doc.fill")
-                .font(.title3)
-                .foregroundStyle(AppColors.accent)
-                .frame(width: 34, height: 34)
-                .background(AppColors.accent.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    private func toggleInlinePlayback() {
+        guard let url = attachment.localURL else { return }
+        if inlinePlayer == nil {
+            inlinePlayer = AVPlayer(url: url)
+        }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(attachment.fileName?.isEmpty == false ? attachment.fileName ?? "Файл" : "Файл")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                if let size = attachment.size {
-                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+        if isInlinePlaying {
+            inlinePlayer?.pause()
+        } else {
+            inlinePlayer?.play()
+        }
+        isInlinePlaying.toggle()
+    }
+
+    private var documentPreview: some View {
+        Button {
+            onOpen?()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.fill")
+                    .font(.title3)
+                    .foregroundStyle(AppColors.accent)
+                    .frame(width: 34, height: 34)
+                    .background(AppColors.accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(attachment.fileName?.isEmpty == false ? attachment.fileName ?? "Файл" : "Файл")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    if let size = attachment.size {
+                        Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var stickerPreview: some View {
+        Button {
+            onOpen?()
+        } label: {
+            ZStack {
+                if let image = attachment.localImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    loadingPlaceholder(systemImage: "face.smiling", title: "Стикер загружается")
                 }
             }
-            Spacer(minLength: 0)
+            .frame(width: 150, height: 150)
         }
-        .padding(10)
+        .buttonStyle(.plain)
+        .disabled(attachment.localURL == nil)
     }
 
     private func loadingPlaceholder(systemImage: String, title: String) -> some View {
@@ -171,6 +240,15 @@ struct MediaViewerView: View {
             } else {
                 MissingMediaView(title: "Видео еще загружается")
             }
+        case .animation:
+            if let player {
+                VideoPlayer(player: player)
+                    .ignoresSafeArea()
+            } else if let path = attachment.localPath {
+                FullscreenImageContent(imagePath: path)
+            } else {
+                MissingMediaView(title: "GIF еще загружается")
+            }
         case .videoNote:
             if let player {
                 GeometryReader { proxy in
@@ -189,15 +267,21 @@ struct MediaViewerView: View {
             }
         case .voice:
             FullscreenVoicePlayer(attachment: attachment)
+        case .sticker:
+            if let path = attachment.localPath {
+                FullscreenImageContent(imagePath: path)
+            } else {
+                MissingMediaView(title: "Стикер еще загружается")
+            }
         case .document:
-            MissingMediaView(title: attachment.fileName ?? "Файл")
+            DocumentFullscreenView(attachment: attachment)
         }
     }
 
     private func preparePlayer() {
         guard player == nil, let url = attachment.localURL else { return }
         switch attachment.kind {
-        case .video, .videoNote:
+        case .video, .videoNote, .animation:
             player = AVPlayer(url: url)
             player?.play()
         default:
@@ -210,11 +294,14 @@ struct FullscreenImageViewer: View {
     let imagePath: String
     let title: String
     @Environment(\.dismiss) private var dismiss
+    @State private var dragOffset: CGSize = .zero
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
+            viewerBackground
             FullscreenImageContent(imagePath: imagePath)
+                .offset(dragOffset)
+                .scaleEffect(dragScale)
 
             FullscreenCloseButton {
                 dismiss()
@@ -222,7 +309,35 @@ struct FullscreenImageViewer: View {
             .padding(.top, 18)
             .padding(.trailing, 18)
         }
+        .simultaneousGesture(dragToCloseGesture)
         .accessibilityLabel(title)
+    }
+
+    private var viewerBackground: some View {
+        Color.black
+            .opacity(max(0.35, 1 - abs(dragOffset.height) / 420))
+            .ignoresSafeArea()
+            .background(.ultraThinMaterial)
+    }
+
+    private var dragScale: CGFloat {
+        max(0.86, 1 - abs(dragOffset.height) / 900)
+    }
+
+    private var dragToCloseGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                dragOffset = value.translation
+            }
+            .onEnded { value in
+                if abs(value.translation.height) > 120 || abs(value.predictedEndTranslation.height) > 220 {
+                    dismiss()
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        dragOffset = .zero
+                    }
+                }
+            }
     }
 }
 
@@ -233,7 +348,7 @@ private struct FullscreenImageContent: View {
 
     var body: some View {
         Group {
-            if let image = UIImage(contentsOfFile: imagePath) {
+            if let image = LocalImageCache.shared.image(path: imagePath) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
@@ -261,6 +376,93 @@ private struct FullscreenImageContent: View {
     }
 }
 
+struct FullscreenAvatarOverlay: View {
+    let imagePath: String
+    let title: String
+    let namespace: Namespace.ID
+    let id: String
+    @Binding var isPresented: Bool
+    @State private var dragOffset: CGSize = .zero
+    @State private var scale: CGFloat = 1
+    @State private var committedScale: CGFloat = 1
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black
+                .opacity(max(0.28, 0.92 - abs(dragOffset.height) / 430))
+                .ignoresSafeArea()
+                .background(.ultraThinMaterial)
+                .onTapGesture {
+                    close()
+                }
+
+            Group {
+                if let image = LocalImageCache.shared.image(path: imagePath) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    MissingMediaView(title: "Не удалось открыть изображение")
+                }
+            }
+            .matchedGeometryEffect(id: id, in: namespace)
+            .padding(18)
+            .offset(dragOffset)
+            .scaleEffect(scale * max(0.84, 1 - abs(dragOffset.height) / 820))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .gesture(zoomGesture)
+            .simultaneousGesture(dragGesture)
+            .onTapGesture(count: 2) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                    scale = scale > 1 ? 1 : 2.2
+                    committedScale = scale
+                }
+            }
+            .accessibilityLabel(title)
+
+            FullscreenCloseButton {
+                close()
+            }
+            .padding(.top, 18)
+            .padding(.trailing, 18)
+        }
+        .transition(.opacity)
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                dragOffset = value.translation
+            }
+            .onEnded { value in
+                if value.translation.height > 110 || value.predictedEndTranslation.height > 220 {
+                    close()
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        dragOffset = .zero
+                    }
+                }
+            }
+    }
+
+    private var zoomGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                scale = min(max(committedScale * value, 1), 4)
+            }
+            .onEnded { _ in
+                committedScale = scale
+            }
+    }
+
+    private func close() {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+            isPresented = false
+            dragOffset = .zero
+        }
+    }
+}
+
 private struct FullscreenVoicePlayer: View {
     let attachment: TgAttachment
 
@@ -283,6 +485,42 @@ private struct FullscreenVoicePlayer: View {
 
             InlineVoicePlayer(attachment: attachment, expanded: true)
                 .frame(maxWidth: 320)
+        }
+        .padding(24)
+    }
+}
+
+private struct DocumentFullscreenView: View {
+    let attachment: TgAttachment
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "doc.fill")
+                .font(.system(size: 76))
+                .foregroundStyle(AppColors.accent)
+
+            VStack(spacing: 5) {
+                Text(attachment.fileName ?? "Файл")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+
+                if let size = attachment.size {
+                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+            }
+
+            if let url = attachment.localURL {
+                ShareLink(item: url) {
+                    Label("Open", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else {
+                MissingMediaView(title: "Файл еще загружается")
+            }
         }
         .padding(24)
     }
@@ -316,6 +554,8 @@ private struct InlineVoicePlayer: View {
 
                 VoiceWaveform()
                     .foregroundStyle(attachment.localURL == nil ? Color.secondary.opacity(0.45) : AppColors.accent)
+                    .opacity(isPlaying ? 1 : 0.72)
+                    .animation(.easeInOut(duration: 0.22), value: isPlaying)
             }
 
             Spacer(minLength: 0)
@@ -354,19 +594,29 @@ private struct InlineVoicePlayer: View {
 
 private struct VoiceWaveform: View {
     private let heights: [CGFloat] = [8, 16, 11, 20, 13, 24, 10, 18, 28, 14, 22, 12, 18, 9, 24, 15, 20, 11]
+    @State private var animated = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 3) {
             ForEach(heights.indices, id: \.self) { index in
                 Capsule()
-                    .frame(width: 3, height: heights[index])
+                    .frame(width: 3, height: animated ? heights[index] : max(6, heights[index] * 0.55))
+                    .animation(
+                        .easeInOut(duration: 0.5)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(index % 5) * 0.05),
+                        value: animated
+                    )
             }
         }
         .frame(height: 30)
+        .onAppear {
+            animated = true
+        }
     }
 }
 
-private struct VideoThumbnailView: View {
+struct VideoThumbnailView: View {
     let url: URL?
     @State private var image: UIImage?
 
@@ -433,7 +683,7 @@ private struct FullscreenCloseButton: View {
     }
 }
 
-private extension TgAttachment {
+extension TgAttachment {
     var localURL: URL? {
         guard let localPath, !localPath.isEmpty, FileManager.default.fileExists(atPath: localPath) else {
             return nil
@@ -443,6 +693,31 @@ private extension TgAttachment {
 
     var localImage: UIImage? {
         guard let localPath, !localPath.isEmpty else { return nil }
-        return UIImage(contentsOfFile: localPath)
+        return LocalImageCache.shared.image(path: localPath)
+    }
+}
+
+final class LocalImageCache {
+    static let shared = LocalImageCache()
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 160
+        cache.totalCostLimit = 80 * 1024 * 1024
+    }
+
+    func image(path: String) -> UIImage? {
+        let key = path as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+
+        guard let image = UIImage(contentsOfFile: path) else {
+            return nil
+        }
+
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        cache.setObject(image, forKey: key, cost: cost)
+        return image
     }
 }

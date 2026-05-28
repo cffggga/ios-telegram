@@ -128,27 +128,11 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                 "@type": "getChat",
                 "chat_id": id
             ])
-            if let title = chatResp["title"] as? String {
-                let subtitle = chatResp["last_message"] as? [String: Any]
-                let preview = subtitle.flatMap { parseMessage($0, fallbackChatId: id)?.text }
-                let avatarPath = try await resolveChatAvatarPath(chatResp)
-                let statusInfo = try await resolveChatStatusInfo(chatResp)
-                let sendInfo = try await resolveChatSendPermissions(chatResp)
-                chats.append(
-                    TgChat(
-                        id: id,
-                        title: title,
-                        lastMessagePreview: preview,
-                        avatarPath: avatarPath,
-                        statusText: statusInfo.text,
-                        isOnline: statusInfo.isOnline,
-                        canSendMessages: sendInfo.canSend,
-                        sendRestrictionText: sendInfo.reason
-                    )
-                )
+            if let chat = try await parseChatSummary(chatResp) {
+                chats.append(chat)
             }
         }
-        return chats
+        return chats.sorted(by: chatSort)
     }
 
     func fetchMessages(chatId: Int64, limit: Int = 100) async throws -> [TgMessage] {
@@ -333,6 +317,157 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         }
     }
 
+    func fetchChatMembers(chatId: Int64, limit: Int = 50) async throws -> [ChatMember] {
+        let chat = try await sendRequest([
+            "@type": "getChat",
+            "chat_id": chatId
+        ])
+
+        guard
+            let type = chat["type"] as? [String: Any],
+            let typeName = type["@type"] as? String
+        else {
+            return []
+        }
+
+        switch typeName {
+        case "chatTypePrivate":
+            guard let userId = int64Value(type["user_id"]) else { return [] }
+            return [try await chatMemberFromUserId(userId, role: nil)]
+
+        case "chatTypeBasicGroup":
+            guard let groupId = int64Value(type["basic_group_id"]) else { return [] }
+            let full = try await sendRequest([
+                "@type": "getBasicGroupFullInfo",
+                "basic_group_id": groupId
+            ])
+            let members = full["members"] as? [[String: Any]] ?? []
+            var result: [ChatMember] = []
+            for member in members.prefix(limit) {
+                guard let userId = int64Value(member["user_id"]) else { continue }
+                result.append(try await chatMemberFromUserId(userId, role: memberRole(member["status"] as? [String: Any])))
+            }
+            return result
+
+        case "chatTypeSupergroup":
+            guard let supergroupId = int64Value(type["supergroup_id"]) else { return [] }
+            let response = try await sendRequest([
+                "@type": "getSupergroupMembers",
+                "supergroup_id": supergroupId,
+                "filter": ["@type": "supergroupMembersFilterRecent"],
+                "offset": 0,
+                "limit": limit
+            ])
+            let members = response["members"] as? [[String: Any]] ?? []
+            var result: [ChatMember] = []
+            for member in members {
+                guard
+                    let sender = member["member_id"] as? [String: Any],
+                    let senderType = sender["@type"] as? String
+                else { continue }
+
+                if senderType == "messageSenderUser", let userId = int64Value(sender["user_id"]) {
+                    result.append(try await chatMemberFromUserId(userId, role: memberRole(member["status"] as? [String: Any])))
+                } else if senderType == "messageSenderChat", let senderChatId = int64Value(sender["chat_id"]) {
+                    let senderChat = try await sendRequest([
+                        "@type": "getChat",
+                        "chat_id": senderChatId
+                    ])
+                    result.append(
+                        ChatMember(
+                            id: senderChatId,
+                            title: (senderChat["title"] as? String) ?? "Чат",
+                            avatarPath: try await resolveChatAvatarPath(senderChat),
+                            statusText: nil,
+                            isOnline: nil,
+                            role: memberRole(member["status"] as? [String: Any])
+                        )
+                    )
+                }
+            }
+            return result
+
+        default:
+            return []
+        }
+    }
+
+    func fetchChatMedia(chatId: Int64, limit: Int = 200) async throws -> [TgMessage] {
+        let messages = try await fetchMessages(chatId: chatId, limit: limit)
+        return messages.filter { message in
+            !message.attachments.isEmpty || message.text.containsURL
+        }
+    }
+
+    func markChatRead(chatId: Int64, messageIds: [Int64]) async throws {
+        guard !messageIds.isEmpty else { return }
+        _ = try await sendRequest([
+            "@type": "viewMessages",
+            "chat_id": chatId,
+            "message_ids": messageIds,
+            "force_read": true,
+            "source": NSNull()
+        ])
+    }
+
+    func markChatUnread(chatId: Int64, unread: Bool) async throws {
+        _ = try await sendRequest([
+            "@type": "toggleChatIsMarkedAsUnread",
+            "chat_id": chatId,
+            "is_marked_as_unread": unread
+        ])
+    }
+
+    func setChatPinned(chatId: Int64, pinned: Bool) async throws {
+        _ = try await sendRequest([
+            "@type": "toggleChatIsPinned",
+            "chat_list": ["@type": "chatListMain"],
+            "chat_id": chatId,
+            "is_pinned": pinned
+        ])
+    }
+
+    func reorderPinnedChats(chatIds: [Int64]) async throws {
+        _ = try await sendRequest([
+            "@type": "setPinnedChats",
+            "chat_list": ["@type": "chatListMain"],
+            "chat_ids": chatIds
+        ])
+    }
+
+    func setChatMute(chatId: Int64, duration: ChatMuteDuration) async throws {
+        _ = try await sendRequest([
+            "@type": "setChatNotificationSettings",
+            "chat_id": chatId,
+            "notification_settings": chatNotificationSettings(muteFor: duration.seconds)
+        ])
+    }
+
+    func clearChatHistory(chatId: Int64) async throws {
+        _ = try await sendRequest([
+            "@type": "deleteChatHistory",
+            "chat_id": chatId,
+            "remove_from_chat_list": false,
+            "revoke": false
+        ])
+    }
+
+    func deleteChat(chatId: Int64) async throws {
+        _ = try await sendRequest([
+            "@type": "deleteChatHistory",
+            "chat_id": chatId,
+            "remove_from_chat_list": true,
+            "revoke": false
+        ])
+    }
+
+    func leaveChat(chatId: Int64) async throws {
+        _ = try await sendRequest([
+            "@type": "leaveChat",
+            "chat_id": chatId
+        ])
+    }
+
     private func startReceiveLoopIfNeeded() {
         guard receiveLoopTask == nil else { return }
         receiveLoopTask = Task.detached { [weak self] in
@@ -478,8 +613,38 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             return
         }
 
-        if type == "updateNewChat" || type == "updateChatLastMessage" {
+        if type == "updateNewChat" {
             eventHandler?(.chatsChanged)
+            return
+        }
+
+        if type == "updateChatLastMessage",
+           let chatId = int64Value(obj["chat_id"]) {
+            eventHandler?(.chatChanged(chatId))
+            return
+        }
+
+        if [
+            "updateChatReadInbox",
+            "updateChatReadOutbox",
+            "updateChatUnreadMentionCount",
+            "updateChatUnreadReactionCount",
+            "updateChatNotificationSettings",
+            "updateChatPosition",
+            "updateChatIsMarkedAsUnread",
+            "updateChatDraftMessage",
+            "updateChatTitle",
+            "updateChatPhoto",
+            "updateChatDefaultDisableNotification"
+        ].contains(type),
+           let chatId = int64Value(obj["chat_id"]) {
+            eventHandler?(.chatChanged(chatId))
+            return
+        }
+
+        if (type == "updateUserChatAction" || type == "updateChatAction"),
+           let chatId = int64Value(obj["chat_id"]) {
+            eventHandler?(.chatTypingChanged(chatId: chatId, text: typingText(from: obj["action"] as? [String: Any])))
         }
     }
 
@@ -585,6 +750,30 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                 size: fileInfo.size ?? int64Value(note["size"]),
                 localPath: fileInfo.localPath
             )]
+        case "messageAnimation":
+            guard let animation = content["animation"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: animation["animation"])
+            return [TgAttachment(
+                id: UUID().uuidString,
+                kind: .animation,
+                fileId: fileInfo.id,
+                fileName: animation["file_name"] as? String,
+                mimeType: animation["mime_type"] as? String,
+                size: fileInfo.size ?? int64Value(animation["size"]),
+                localPath: fileInfo.localPath
+            )]
+        case "messageSticker":
+            guard let sticker = content["sticker"] as? [String: Any] else { return [] }
+            let fileInfo = extractFileInfo(from: sticker["sticker"])
+            return [TgAttachment(
+                id: UUID().uuidString,
+                kind: .sticker,
+                fileId: fileInfo.id,
+                fileName: nil,
+                mimeType: sticker["mime_type"] as? String,
+                size: fileInfo.size ?? int64Value(sticker["size"]),
+                localPath: fileInfo.localPath
+            )]
         case "messageDocument":
             guard let doc = content["document"] as? [String: Any] else { return [] }
             let fileInfo = extractFileInfo(from: doc["document"])
@@ -641,10 +830,65 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
 
     private func isRenderableAttachmentContent(_ contentType: String) -> Bool {
         switch contentType {
-        case "messagePhoto", "messageVideo", "messageVoiceNote", "messageVideoNote", "messageDocument":
+        case "messagePhoto", "messageVideo", "messageVoiceNote", "messageVideoNote", "messageAnimation", "messageSticker", "messageDocument":
             return true
         default:
             return false
+        }
+    }
+
+    private func chatMemberFromUserId(_ userId: Int64, role: String?) async throws -> ChatMember {
+        let user = try await sendRequest([
+            "@type": "getUser",
+            "user_id": userId
+        ])
+        let firstName = user["first_name"] as? String ?? ""
+        let lastName = user["last_name"] as? String ?? ""
+        let name = [firstName, lastName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let status = (user["status"] as? [String: Any]).map(mapUserStatus)
+
+        return ChatMember(
+            id: userId,
+            title: name.isEmpty ? "Пользователь" : name,
+            avatarPath: try await resolveUserAvatarPath(user),
+            statusText: status?.text,
+            isOnline: status?.isOnline,
+            role: role
+        )
+    }
+
+    private func resolveUserAvatarPath(_ user: [String: Any]) async throws -> String? {
+        guard
+            let profilePhoto = user["profile_photo"] as? [String: Any],
+            let file = (profilePhoto["big"] as? [String: Any]) ?? (profilePhoto["small"] as? [String: Any])
+        else {
+            return nil
+        }
+
+        if
+            let local = file["local"] as? [String: Any],
+            let path = local["path"] as? String,
+            !path.isEmpty {
+            return path
+        }
+
+        if let fileId = int64Value(file["id"]) {
+            return try await downloadFile(fileId: fileId)
+        }
+        return nil
+    }
+
+    private func memberRole(_ status: [String: Any]?) -> String? {
+        guard let statusType = status?["@type"] as? String else { return nil }
+        switch statusType {
+        case "chatMemberStatusCreator": return "Owner"
+        case "chatMemberStatusAdministrator": return "Admin"
+        case "chatMemberStatusRestricted": return "Restricted"
+        case "chatMemberStatusBanned": return "Banned"
+        default: return nil
         }
     }
 
@@ -677,6 +921,178 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         return (photo["small"] as? [String: Any]) ?? (photo["big"] as? [String: Any])
     }
 
+    private func parseChatSummary(_ chat: [String: Any]) async throws -> TgChat? {
+        guard let id = int64Value(chat["id"]), let title = chat["title"] as? String else {
+            return nil
+        }
+
+        let lastMessageObject = chat["last_message"] as? [String: Any]
+        let lastMessage = lastMessageObject.flatMap { parseMessage($0, fallbackChatId: id) }
+        let lastReadOutboxMessageId = int64Value(chat["last_read_outbox_message_id"]) ?? 0
+        let unreadCount = (chat["unread_count"] as? Int) ?? Int(int64Value(chat["unread_count"]) ?? 0)
+        let position = mainChatPosition(chat)
+        let notification = notificationInfo(chat["notification_settings"] as? [String: Any])
+        let statusInfo = try await resolveChatStatusInfo(chat)
+        let sendInfo = try await resolveChatSendPermissions(chat)
+        var kind = try await resolveChatKind(chat)
+
+        if (chat["is_saved_messages"] as? Bool) == true {
+            kind = .savedMessages
+        }
+
+        return TgChat(
+            id: id,
+            title: title,
+            lastMessagePreview: lastMessageObject.flatMap(messagePreview) ?? lastMessage?.text,
+            lastMessageId: lastMessage?.id,
+            lastMessageDate: lastMessage?.createdAt,
+            lastMessageOutgoing: lastMessage?.outgoing ?? false,
+            lastMessageRead: (lastMessage?.outgoing == true) && ((lastMessage?.id ?? 0) <= lastReadOutboxMessageId),
+            avatarPath: try await resolveChatAvatarPath(chat),
+            statusText: statusInfo.text,
+            isOnline: statusInfo.isOnline,
+            canSendMessages: sendInfo.canSend,
+            sendRestrictionText: sendInfo.reason,
+            unreadCount: unreadCount,
+            kind: kind,
+            isPinned: position.isPinned,
+            pinOrder: position.order,
+            isMuted: notification.isMuted,
+            muteUntil: notification.muteUntil,
+            isMarkedUnread: (chat["is_marked_as_unread"] as? Bool) ?? false,
+            draftText: draftText(from: chat["draft_message"] as? [String: Any]),
+            typingText: nil
+        )
+    }
+
+    private func chatSort(_ lhs: TgChat, _ rhs: TgChat) -> Bool {
+        if lhs.isPinned != rhs.isPinned {
+            return lhs.isPinned && !rhs.isPinned
+        }
+        if lhs.isPinned, rhs.isPinned {
+            return (lhs.pinOrder ?? 0) > (rhs.pinOrder ?? 0)
+        }
+        return (lhs.lastMessageDate ?? .distantPast) > (rhs.lastMessageDate ?? .distantPast)
+    }
+
+    private func mainChatPosition(_ chat: [String: Any]) -> (isPinned: Bool, order: Int64?) {
+        let positions = chat["positions"] as? [[String: Any]] ?? []
+        for position in positions {
+            guard
+                let list = position["list"] as? [String: Any],
+                (list["@type"] as? String) == "chatListMain"
+            else { continue }
+
+            return (
+                (position["is_pinned"] as? Bool) ?? false,
+                int64Value(position["order"])
+            )
+        }
+        return (false, nil)
+    }
+
+    private func notificationInfo(_ settings: [String: Any]?) -> (isMuted: Bool, muteUntil: Date?) {
+        guard let settings else { return (false, nil) }
+        let muteFor = Int(int64Value(settings["mute_for"]) ?? 0)
+        guard muteFor > 0 else { return (false, nil) }
+
+        if muteFor > 366 * 24 * 60 * 60 {
+            return (true, nil)
+        }
+        return (true, Date().addingTimeInterval(TimeInterval(muteFor)))
+    }
+
+    private func draftText(from draft: [String: Any]?) -> String? {
+        guard let draft else { return nil }
+        let content = (draft["input_message_text"] as? [String: Any])
+            ?? (draft["input_message_content"] as? [String: Any])
+        guard
+            let textObject = content?["text"] as? [String: Any],
+            let text = textObject["text"] as? String,
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
+    private func messagePreview(_ message: [String: Any]) -> String? {
+        guard
+            let content = message["content"] as? [String: Any],
+            let contentType = content["@type"] as? String
+        else {
+            return nil
+        }
+
+        if contentType == "messageText",
+           let textObject = content["text"] as? [String: Any],
+           let text = textObject["text"] as? String,
+           !text.isEmpty {
+            return text
+        }
+
+        if let captionObject = content["caption"] as? [String: Any],
+           let caption = captionObject["text"] as? String,
+           !caption.isEmpty {
+            return caption
+        }
+
+        switch contentType {
+        case "messagePhoto": return "Фото"
+        case "messageVideo": return "Видео"
+        case "messageVoiceNote": return "Голосовое сообщение"
+        case "messageVideoNote": return "Видеосообщение"
+        case "messageAnimation": return "GIF"
+        case "messageSticker": return "Стикер"
+        case "messageDocument": return "Файл"
+        default: return nil
+        }
+    }
+
+    private func chatNotificationSettings(muteFor: Int) -> [String: Any] {
+        [
+            "@type": "chatNotificationSettings",
+            "use_default_mute_for": false,
+            "mute_for": muteFor,
+            "use_default_sound": true,
+            "sound_id": 0,
+            "use_default_show_preview": true,
+            "show_preview": true,
+            "use_default_mute_stories": true,
+            "mute_stories": false,
+            "use_default_story_sound": true,
+            "story_sound_id": 0,
+            "use_default_show_story_poster": true,
+            "show_story_poster": true,
+            "use_default_disable_pinned_message_notifications": true,
+            "disable_pinned_message_notifications": false,
+            "use_default_disable_mention_notifications": true,
+            "disable_mention_notifications": false
+        ]
+    }
+
+    private func typingText(from action: [String: Any]?) -> String? {
+        guard let action, let type = action["@type"] as? String else { return nil }
+        switch type {
+        case "chatActionTyping":
+            return "typing..."
+        case "chatActionRecordingVoiceNote":
+            return "recording voice..."
+        case "chatActionRecordingVideo", "chatActionRecordingVideoNote":
+            return "recording video..."
+        case "chatActionUploadingPhoto":
+            return "uploading photo..."
+        case "chatActionUploadingVideo", "chatActionUploadingVideoNote":
+            return "uploading video..."
+        case "chatActionUploadingDocument":
+            return "uploading file..."
+        case "chatActionChoosingSticker":
+            return "choosing sticker..."
+        default:
+            return nil
+        }
+    }
+
     private func resolveChatStatusInfo(_ chat: [String: Any]) async throws -> (text: String?, isOnline: Bool?) {
         guard
             let type = chat["type"] as? [String: Any],
@@ -701,6 +1117,33 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
         }
 
         return (nil, nil)
+    }
+
+    private func resolveChatKind(_ chat: [String: Any]) async throws -> ChatKind {
+        guard
+            let type = chat["type"] as? [String: Any],
+            let typeName = type["@type"] as? String
+        else {
+            return .unknown
+        }
+
+        switch typeName {
+        case "chatTypePrivate":
+            return .private
+        case "chatTypeBasicGroup":
+            return .basicGroup
+        case "chatTypeSupergroup":
+            guard let supergroupId = int64Value(type["supergroup_id"]) else {
+                return .supergroup
+            }
+            let supergroup = try await sendRequest([
+                "@type": "getSupergroup",
+                "supergroup_id": supergroupId
+            ])
+            return ((supergroup["is_channel"] as? Bool) ?? false) ? .channel : .supergroup
+        default:
+            return .unknown
+        }
     }
 
     private func resolveChatSendPermissions(_ chat: [String: Any]) async throws -> (canSend: Bool?, reason: String?) {
@@ -824,5 +1267,13 @@ enum TDLibClientError: LocalizedError {
         case .invalidApiCredentials:
             return "Invalid API credentials format"
         }
+    }
+}
+
+private extension String {
+    var containsURL: Bool {
+        localizedCaseInsensitiveContains("http://")
+            || localizedCaseInsensitiveContains("https://")
+            || localizedCaseInsensitiveContains("t.me/")
     }
 }
