@@ -79,14 +79,7 @@ struct ChatDetailView: View {
                 TextField("Сообщение", text: $vm.composeText, axis: .vertical)
                     .lineLimit(1...4)
                     .focused($isComposerFocused)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .glassField()
 
                 if vm.editingMessageId != nil {
                     Button {

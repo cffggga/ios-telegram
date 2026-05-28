@@ -38,16 +38,21 @@ struct SetupCredentialsView: View {
 
                     TextField("API ID", text: $vm.apiIdText)
                         .keyboardType(.numberPad)
-                        .textFieldStyle(.roundedBorder)
+                        .textContentType(.oneTimeCode)
+                        .glassField()
 
                     TextField("API Hash", text: $vm.apiHash)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .textFieldStyle(.roundedBorder)
+                        .glassField()
                 }
                 .padding()
-                .background(Color(.secondarySystemGroupedBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .background(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
 
                 Button {
                     Task { await vm.saveAndConnect() }
@@ -60,11 +65,8 @@ struct SetupCredentialsView: View {
                         Text(vm.isBusy ? "Подключение…" : "Продолжить")
                             .fontWeight(.semibold)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(AppColors.accent)
+                .glassButton(prominent: true)
                 .disabled(vm.isBusy)
 
                 if !vm.status.isEmpty {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MessageBubbleView: View {
     let message: TgMessage
@@ -6,6 +7,10 @@ struct MessageBubbleView: View {
     let incomingTitle: String
     var onEdit: (() -> Void)?
     var onDelete: ((_ revoke: Bool) -> Void)?
+
+    private var maxBubbleWidth: CGFloat {
+        UIScreen.main.bounds.width * 0.72
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -15,23 +20,25 @@ struct MessageBubbleView: View {
                 AvatarView(title: incomingTitle, identifier: message.chatId, imagePath: incomingAvatarPath, size: 30)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(message.text.isEmpty ? " " : message.text)
-                    .font(.body)
-                    .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
-                    .multilineTextAlignment(.leading)
-                    .strikethrough(message.isDeleted, pattern: .solid, color: .secondary)
-                    .padding(.bottom, 12)
+            ZStack(alignment: .bottomTrailing) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(message.text.isEmpty ? " " : message.text)
+                        .font(.body)
+                        .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
+                        .multilineTextAlignment(.leading)
+                        .strikethrough(message.isDeleted, pattern: .solid, color: .secondary)
 
-                if !message.attachments.isEmpty {
-                    ForEach(message.attachments) { attachment in
-                        Text(attachmentCaption(attachment))
-                            .font(.caption)
-                            .foregroundStyle(AppColors.accent)
+                    if !message.attachments.isEmpty {
+                        ForEach(message.attachments) { attachment in
+                            Text(attachmentCaption(attachment))
+                                .font(.caption)
+                                .foregroundStyle(AppColors.accent)
+                        }
                     }
                 }
+                .padding(.bottom, 14)
 
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     if message.isDeleted {
                         Image(systemName: "trash")
                             .font(.caption2)
@@ -40,22 +47,18 @@ struct MessageBubbleView: View {
                     Text(message.createdAt, style: .time)
                         .font(.caption2)
                         .foregroundStyle(message.outgoing ? AppColors.outgoingText.opacity(0.8) : .secondary)
+                    if message.outgoing {
+                        Image(systemName: "checkmark")
+                            .font(.caption2.bold())
+                            .foregroundStyle(AppColors.accent)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
+            .frame(maxWidth: maxBubbleWidth, alignment: .leading)
             .background(message.outgoing ? AppColors.outgoingBubble : AppColors.incomingBubble)
             .clipShape(BubbleShape(isOutgoing: message.outgoing))
-            .overlay(alignment: .bottomTrailing) {
-                if message.outgoing {
-                    Image(systemName: "checkmark")
-                        .font(.caption2.bold())
-                        .foregroundStyle(AppColors.accent)
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 6)
-                }
-            }
 
             if !message.outgoing {
                 Spacer(minLength: 48)

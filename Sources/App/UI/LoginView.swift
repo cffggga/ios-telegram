@@ -23,16 +23,16 @@ struct LoginView: View {
                     TextField("+7 999 123 45 67", text: $vm.phone)
                         .keyboardType(.phonePad)
                         .textContentType(.telephoneNumber)
-                        .textFieldStyle(.roundedBorder)
+                        .glassField()
                 case .waitCode:
                     TextField("Код из Telegram", text: $vm.code)
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)
-                        .textFieldStyle(.roundedBorder)
+                        .glassField()
                 case .waitPassword:
                     SecureField("Пароль 2FA", text: $vm.password)
                         .textContentType(.password)
-                        .textFieldStyle(.roundedBorder)
+                        .glassField()
                 case .ready:
                     EmptyView()
                 }
@@ -60,11 +60,8 @@ struct LoginView: View {
                     Text(vm.isBusy ? "Проверка…" : "Войти")
                         .fontWeight(.semibold)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(AppColors.accent)
+            .glassButton(prominent: true)
             .disabled(vm.isBusy || vm.authState == .ready)
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
