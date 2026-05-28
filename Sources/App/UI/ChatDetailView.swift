@@ -111,7 +111,7 @@ struct ChatDetailView: View {
                 } label: {
                     Image(systemName: "paperplane.fill")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .white)
+                        .foregroundStyle(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.white)
                         .padding(10)
                         .background(vm.composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.white.opacity(0.12) : AppColors.accent)
                         .clipShape(Circle())
