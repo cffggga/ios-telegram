@@ -14,7 +14,7 @@ struct MessageBubbleView: View {
             VStack(alignment: message.outgoing ? .trailing : .leading, spacing: 4) {
                 Text(message.text.isEmpty ? " " : message.text)
                     .font(.body)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(message.outgoing ? AppColors.outgoingText : .primary)
                     .multilineTextAlignment(message.outgoing ? .trailing : .leading)
                     .strikethrough(message.isDeleted, pattern: .solid, color: .secondary)
                     .padding(.bottom, 12)
@@ -35,7 +35,7 @@ struct MessageBubbleView: View {
                     }
                     Text(message.createdAt, style: .time)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(message.outgoing ? AppColors.outgoingText.opacity(0.8) : .secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }

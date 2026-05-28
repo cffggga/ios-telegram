@@ -13,7 +13,8 @@ struct ChatDetailView: View {
     }
 
     private var subtitle: String {
-        vm.isBusy ? "обновление..." : "в сети недавно"
+        if vm.isBusy { return "обновление..." }
+        return selectedChat?.statusText ?? "был(а) недавно"
     }
 
     var body: some View {
@@ -56,7 +57,10 @@ struct ChatDetailView: View {
             HStack(spacing: 12) {
                 TextField("Сообщение", text: $vm.composeText, axis: .vertical)
                     .lineLimit(1...4)
-                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(AppColors.composerBackground)
+                    .clipShape(Capsule())
 
                 Button {
                     Task { await vm.sendMessage() }
@@ -71,7 +75,7 @@ struct ChatDetailView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color(.systemBackground))
+            .background(AppColors.chatBackground)
         }
         .background(AppColors.chatBackground)
         .navigationTitle(title)

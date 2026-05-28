@@ -132,7 +132,16 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
                 let subtitle = chatResp["last_message"] as? [String: Any]
                 let preview = subtitle.flatMap { parseMessage($0, fallbackChatId: id)?.text }
                 let avatarPath = parseChatAvatarPath(chatResp)
-                chats.append(TgChat(id: id, title: title, lastMessagePreview: preview, avatarPath: avatarPath))
+                let statusText = try await resolveChatStatusText(chatResp)
+                chats.append(
+                    TgChat(
+                        id: id,
+                        title: title,
+                        lastMessagePreview: preview,
+                        avatarPath: avatarPath,
+                        statusText: statusText
+                    )
+                )
             }
         }
         return chats
@@ -452,6 +461,61 @@ final class TDLibClient: TelegramClientProtocol, @unchecked Sendable {
             return nil
         }
         return path
+    }
+
+    private func resolveChatStatusText(_ chat: [String: Any]) async throws -> String? {
+        guard
+            let type = chat["type"] as? [String: Any],
+            let typeName = type["@type"] as? String
+        else {
+            return nil
+        }
+
+        if typeName == "chatTypePrivate", let userId = int64Value(type["user_id"]) {
+            let userResp = try await sendRequest([
+                "@type": "getUser",
+                "user_id": userId
+            ])
+            if let status = userResp["status"] as? [String: Any] {
+                return mapUserStatus(status)
+            }
+            return "был(а) недавно"
+        }
+
+        if typeName == "chatTypeBasicGroup" || typeName == "chatTypeSupergroup" {
+            return "группа"
+        }
+
+        return nil
+    }
+
+    private func mapUserStatus(_ status: [String: Any]) -> String {
+        let statusType = status["@type"] as? String ?? ""
+        switch statusType {
+        case "userStatusOnline":
+            return "в сети"
+        case "userStatusOffline":
+            if let wasOnline = int64Value(status["was_online"]), wasOnline > 0 {
+                return "был(а) в сети \(relativeTimeText(fromUnix: wasOnline))"
+            }
+            return "был(а) недавно"
+        case "userStatusRecently":
+            return "был(а) недавно"
+        case "userStatusLastWeek":
+            return "был(а) на этой неделе"
+        case "userStatusLastMonth":
+            return "был(а) в этом месяце"
+        default:
+            return "скрыт(а)"
+        }
+    }
+
+    private func relativeTimeText(fromUnix value: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(value))
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        formatter.locale = Locale(identifier: "ru_RU")
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func mapAuthState(from tdType: String) -> AuthState {

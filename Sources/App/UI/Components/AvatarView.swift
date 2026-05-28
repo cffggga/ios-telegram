@@ -25,6 +25,11 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
     }
 
     private func loadAvatarImage() -> UIImage? {
